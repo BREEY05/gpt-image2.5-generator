@@ -4,7 +4,7 @@ import { api, ApiError } from "./api";
 import { applyTheme, loadTheme, resolveTheme, saveTheme } from "./theme";
 import type { ThemeMode } from "./theme";
 import { capsForModel } from "./types";
-import type { AppState, Generation, GeneratePayload, Provider } from "./types";
+import type { AppState, Generation, GeneratePayload, Provider, Quota, UsageSummary } from "./types";
 import { Button, IconButton, StatusDot, Toast } from "./ui";
 import type { ToastState } from "./ui";
 import ProviderRail from "./components/ProviderRail";
@@ -13,6 +13,7 @@ import Results from "./components/Results";
 import HistoryRail from "./components/HistoryRail";
 import ProviderModal from "./components/ProviderModal";
 import SettingsModal from "./components/SettingsModal";
+import QuotaBar from "./components/QuotaBar";
 
 type TestInfo = { busy: boolean; ok?: boolean; message?: string; latencyMs?: number; hint?: string };
 
@@ -29,6 +30,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [testInfo, setTestInfo] = useState<Record<string, TestInfo>>({});
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => loadTheme());
+  const [quota, setQuota] = useState<Quota | null>(null);
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
   const startedRef = useRef(0);
 
   const provider = useMemo(
@@ -52,6 +56,35 @@ export default function App() {
     setThemeMode(mode);
     saveTheme(mode);
   }, []);
+
+  const loadUsage = useCallback(async (pid: string, withQuota: boolean, force?: boolean) => {
+    if (!pid) {
+      setUsage(null);
+      setQuota(null);
+      return;
+    }
+    api.usage(pid).then(setUsage).catch(() => {});
+    if (!withQuota) return;
+    setQuotaLoading(true);
+    try {
+      const next = await api.quota(pid, !!force);
+      setQuota(next);
+    } catch (e) {
+      setQuota({ available: false, checkedAt: Date.now(), message: "额度查询失败", hint: "检查上游或网络后重试" });
+    } finally {
+      setQuotaLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!providerId) {
+      setUsage(null);
+      setQuota(null);
+      return;
+    }
+    setQuota(null);
+    loadUsage(providerId, true, false);
+  }, [providerId, loadUsage]);
 
   const refresh = useCallback(async () => {
     const [next, hist] = await Promise.all([api.state(), api.generations(40)]);
@@ -90,15 +123,17 @@ export default function App() {
         const res = await api.generate(Object.assign({}, payload, { providerId: provider.id }));
         setCurrent(res.generation);
         api.generations(40).then((h) => setHistory(h.generations)).catch(() => {});
+        loadUsage(provider.id, true, false);
       } catch (e) {
         const err = e instanceof ApiError ? e : new ApiError(e instanceof Error ? e.message : String(e), "", 0);
         setToast({ kind: "error", message: err.message, hint: err.hint, id: Date.now() });
         api.generations(40).then((h) => setHistory(h.generations)).catch(() => {});
+        loadUsage(provider.id, false);
       } finally {
         setBusy(false);
       }
     },
-    [provider]
+    [provider, loadUsage]
   );
 
   const handleTest = useCallback(
@@ -208,6 +243,17 @@ export default function App() {
         </div>
       </header>
 
+      <QuotaBar
+        provider={provider}
+        quota={quota}
+        quotaLoading={quotaLoading}
+        usage={usage}
+        lastGeneration={current}
+        onRefresh={() => {
+          if (provider) loadUsage(provider.id, true, true);
+        }}
+      />
+
       <div className="flex min-h-0 flex-1">
         <ProviderRail
           providers={state.providers}
@@ -255,6 +301,7 @@ export default function App() {
           setProviderModal({ open: false, provider: null });
           await refresh();
           setProviderId(saved.id);
+          loadUsage(saved.id, true, true);
         }}
       />
 

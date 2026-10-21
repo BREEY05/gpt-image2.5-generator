@@ -23,18 +23,27 @@ export default function SettingsModal(props: {
 }) {
   const [concurrency, setConcurrency] = useState(2);
   const [defaultProviderId, setDefaultProviderId] = useState("");
+  const [priceInputPerM, setPriceInputPerM] = useState(0);
+  const [priceOutputPerM, setPriceOutputPerM] = useState(0);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!props.open) return;
     setConcurrency(props.state.settings.concurrency || 2);
     setDefaultProviderId(props.state.settings.defaultProviderId || "");
+    setPriceInputPerM(Number(props.state.settings.priceInputPerM) || 0);
+    setPriceOutputPerM(Number(props.state.settings.priceOutputPerM) || 0);
   }, [props.open, props.state]);
 
   async function handleSave() {
     setSaving(true);
     try {
-      await api.saveSettings({ concurrency, defaultProviderId });
+      await api.saveSettings({
+        concurrency,
+        defaultProviderId,
+        priceInputPerM: Math.max(0, Number(priceInputPerM) || 0),
+        priceOutputPerM: Math.max(0, Number(priceOutputPerM) || 0)
+      });
       props.onSaved();
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(e instanceof Error ? e.message : String(e), "", 0);
@@ -90,6 +99,30 @@ export default function SettingsModal(props: {
             onChange={(e) => setConcurrency(Math.max(1, Math.min(8, Number(e.target.value) || 2)))}
           />
         </Field>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="输入 token 单价" hint="USD / 百万 token">
+            <TextInput
+              type="number"
+              min={0}
+              step="0.01"
+              value={priceInputPerM}
+              onChange={(e) => setPriceInputPerM(Math.max(0, Number(e.target.value) || 0))}
+            />
+          </Field>
+          <Field label="输出 token 单价" hint="USD / 百万 token">
+            <TextInput
+              type="number"
+              min={0}
+              step="0.01"
+              value={priceOutputPerM}
+              onChange={(e) => setPriceOutputPerM(Math.max(0, Number(e.target.value) || 0))}
+            />
+          </Field>
+        </div>
+        <p className="-mt-1 text-[11px] leading-relaxed text-faint">
+          填 0 表示不估算金额，只统计 token。图片模型主要按输出 token 计费，单价见服务商定价页；填好后顶部额度条会显示今日/本月预估花费。
+        </p>
 
         <Field label="默认 Provider" hint="启动时自动选中">
           <Select value={defaultProviderId} onChange={(e) => setDefaultProviderId(e.target.value)}>

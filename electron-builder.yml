@@ -1,0 +1,62 @@
+# electron-builder configuration for GPT Image Studio (Windows NSIS, per-user).
+appId: com.gptimagestudio.app
+productName: GPT Image Studio
+copyright: Copyright © 2026 GPT Image Studio
+
+directories:
+  buildResources: build
+  output: release
+
+# asar is intentionally disabled: verify-release.mjs scans
+# release/win-unpacked/resources/app/** and the server reads static files from
+# resources/app/server/public without needing asar support.
+asar: false
+
+files:
+  - electron/**/*
+  - server/**/*
+  - build/icon.ico
+  - package.json
+  - LICENSE
+  - "!docs/**"
+  - "!data/**"
+  - "!**/*.map"
+  - "!**/.DS_Store"
+  - "!**/Thumbs.db"
+  - "!node_modules/**"
+
+# Everything the backend needs is built into server/public; no npm runtime
+# dependencies are bundled (the server only imports node: builtins).
+npmRebuild: false
+nodeGypRebuild: false
+removePackageScripts: true
+compression: normal
+afterPack: electron/after-pack.mjs
+artifactName: GPT-Image-Studio-${version}-Setup.${ext}
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  executableName: GPT Image Studio
+  requestedExecutionLevel: asInvoker
+  signExecutable: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: GPT Image Studio
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  menuCategory: false
+  license: LICENSE
+  differentialPackage: false

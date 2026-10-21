@@ -6,8 +6,10 @@ import { spawn } from "node:child_process";
 import {
   ROOT, DATA_DIR, IMAGES_DIR, decryptKey, listProviders, getProviderRow,
   createProvider, updateProvider, deleteProvider, saveTestResult,
-  getSettings, setSettings, insertGeneration, listGenerations, deleteGeneration, closeDb, checkpoint
+  getSettings, setSettings, insertGeneration, listGenerations, deleteGeneration, closeDb, checkpoint,
+  usageSummary, normalizeUsage, estimateCost
 } from "./db.mjs";
+import { getQuota } from "./quota.mjs";
 import { PRESET_MODELS, SIZE_PRESETS } from "./models.mjs";
 import { normalizeBaseUrl, probeModels, runTest, generateImages, editImages, ApiError } from "./openai.mjs";
 
@@ -237,6 +239,7 @@ async function handleGenerate(req, res) {
       }, 3);
     });
     const files = saveImages(out.images, format);
+    const tokens = normalizeUsage(out.usage);
     const record = {
       id: crypto.randomUUID(),
       providerId: row.id,
@@ -249,6 +252,9 @@ async function handleGenerate(req, res) {
       error: "",
       latencyMs: Date.now() - started,
       usage: out.usage,
+      tokens: tokens,
+      costUsd: estimateCost(tokens, getSettings()),
+      imageCount: files.length,
       createdAt: Date.now()
     };
     insertGeneration(record);
@@ -267,6 +273,9 @@ async function handleGenerate(req, res) {
       error: err.message,
       latencyMs: Date.now() - started,
       usage: null,
+      tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      costUsd: 0,
+      imageCount: 0,
       createdAt: Date.now()
     };
     insertGeneration(record);
@@ -290,6 +299,11 @@ async function handleApi(req, res, url, pathname) {
 
   if (resource === "state" && method === "GET") {
     return json(res, 200, buildState());
+  }
+
+  if (resource === "usage" && method === "GET") {
+    const providerId = url.searchParams.get("providerId") || "";
+    return json(res, 200, usageSummary(providerId));
   }
 
   if (resource === "providers") {
@@ -345,6 +359,16 @@ async function handleApi(req, res, url, pathname) {
       return json(res, 200, result);
     }
 
+    if (id && action === "quota" && method === "GET") {
+      const row = getProviderRow(id);
+      if (!row) return json(res, 404, { error: { message: "Provider 不存在" } });
+      const apiKey = decryptKey(row.key_cipher);
+      if (!apiKey) return json(res, 400, { error: { message: "请先填写 API Key" } });
+      const provider = { id: row.id, baseUrl: normalizeBaseUrl(row.base_url), authStyle: row.auth_style };
+      const result = await getQuota(provider, apiKey, { force: url.searchParams.get("force") === "1" });
+      return json(res, 200, result);
+    }
+
     if (id && action === "models" && method === "GET") {
       const row = getProviderRow(id);
       if (!row) return json(res, 404, { error: { message: "Provider 不存在" } });
@@ -388,6 +412,8 @@ async function handleApi(req, res, url, pathname) {
       const patch = {};
       if (body.concurrency != null) patch.concurrency = Math.max(1, Math.min(8, Number(body.concurrency) || 2));
       if (body.defaultProviderId != null) patch.defaultProviderId = String(body.defaultProviderId);
+      if (body.priceInputPerM != null) patch.priceInputPerM = Math.max(0, Number(body.priceInputPerM) || 0);
+      if (body.priceOutputPerM != null) patch.priceOutputPerM = Math.max(0, Number(body.priceOutputPerM) || 0);
       return json(res, 200, { settings: setSettings(patch) });
     }
   }

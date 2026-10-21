@@ -129,6 +129,25 @@ async function main() {
   r = await req("/api/generations?limit=10");
   assert(r.status === 200 && r.json.generations.length >= 1, "历史记录可读", r.json && r.json.generations && r.json.generations.length);
 
+  const newest = r.json.generations[0];
+  assert(!!newest && !!newest.tokens && newest.tokens.totalTokens > 0, "生成记录带 token 统计", newest && newest.tokens);
+  assert(!!newest && newest.imageCount === 2, "生成记录带图片数量", newest && newest.imageCount);
+
+  r = await req("/api/providers/" + providerId + "/quota");
+  assert(
+    r.status === 200 && r.json.available === true && Math.abs(Number(r.json.remaining) - 42.5) < 0.001,
+    "额度接口读取 /credits",
+    r.json
+  );
+
+  r = await req("/api/usage?providerId=" + providerId);
+  assert(r.status === 200 && r.json.today.images === 2 && r.json.today.totalTokens > 0, "用量统计聚合", r.json && r.json.today);
+
+  r = await req("/api/settings", { method: "PUT", body: JSON.stringify({ priceInputPerM: 10, priceOutputPerM: 40 }) });
+  assert(r.status === 200 && r.json.settings.priceOutputPerM === 40, "保存 token 单价", r.json);
+  r = await req("/api/usage?providerId=" + providerId);
+  assert(r.status === 200 && r.json.today.costUsd > 0, "按单价估算花费", r.json && r.json.today);
+
   r = await req("/api/generate", {
     method: "POST",
     body: JSON.stringify({

@@ -1,4 +1,4 @@
-import type { AppState, Generation, GeneratePayload, Provider, Settings } from "./types";
+import type { AppState, Generation, GeneratePayload, Provider, Quota, Settings, UsageSummary } from "./types";
 
 export class ApiError extends Error {
   hint: string;
@@ -47,6 +47,11 @@ export const api = {
     ),
 
   models: (id: string) => request<{ models: { id: string }[]; total: number }>("/api/providers/" + id + "/models"),
+
+  quota: (id: string, force?: boolean) =>
+    request<Quota>("/api/providers/" + id + "/quota" + (force ? "?force=1" : "")),
+
+  usage: (providerId: string) => request<UsageSummary>("/api/usage?providerId=" + encodeURIComponent(providerId)),
 
   generate: (payload: GeneratePayload) =>
     request<{ generation: Generation }>("/api/generate", { method: "POST", body: JSON.stringify(payload) }),

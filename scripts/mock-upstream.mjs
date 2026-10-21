@@ -109,6 +109,10 @@ function send(res, status, payload) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", "http://localhost");
 
+  if (req.method === "GET" && url.pathname.endsWith("/credits")) {
+    return send(res, 200, { object: "credits", balance: 42.5, currency: "USD", total_granted: 60, total_used: 17.5 });
+  }
+
   if (req.method === "GET" && url.pathname.endsWith("/models")) {
     return send(res, 200, {
       object: "list",

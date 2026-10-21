@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Clock, Cpu, Download, Image as ImageIcon, Sparkles, X } from "lucide-react";
 import type { Generation } from "../types";
-import { formatMs, formatTime } from "../types";
+import { formatMs, formatTime, formatTokens, formatUsd } from "../types";
 import { cn } from "../ui";
 
 export default function Results(props: { generation: Generation | null }) {
@@ -86,6 +86,12 @@ export default function Results(props: { generation: Generation | null }) {
                 {formatMs(gen.latencyMs)}
               </span>
               <span>{gen.params.n} 张 · {gen.params.output_format.toUpperCase()}</span>
+              {gen.tokens && gen.tokens.totalTokens > 0 ? (
+                <span>
+                  {formatTokens(gen.tokens.totalTokens)} tokens
+                  {gen.costUsd ? " · 约 " + formatUsd(gen.costUsd) : ""}
+                </span>
+              ) : null}
               {gen.params.background && gen.params.background !== "auto" ? <span>背景 {gen.params.background}</span> : null}
             </div>
           </div>

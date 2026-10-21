@@ -62,7 +62,22 @@ db.exec("CREATE TABLE IF NOT EXISTS providers (id TEXT PRIMARY KEY, name TEXT NO
 db.exec("CREATE TABLE IF NOT EXISTS generations (id TEXT PRIMARY KEY, provider_id TEXT, provider_name TEXT, mode TEXT, prompt TEXT, params TEXT, files TEXT, status TEXT, error TEXT, latency_ms INTEGER, usage TEXT, created_at INTEGER NOT NULL)");
 db.exec("CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT)");
 
-const DEFAULT_SETTINGS = { concurrency: 2, defaultProviderId: "" };
+function migrate() {
+  const columns = new Set(db.prepare("PRAGMA table_info(generations)").all().map(function (row) { return row.name; }));
+  const additions = [
+    ["input_tokens", "INTEGER DEFAULT 0"],
+    ["output_tokens", "INTEGER DEFAULT 0"],
+    ["total_tokens", "INTEGER DEFAULT 0"],
+    ["cost_usd", "REAL DEFAULT 0"],
+    ["image_count", "INTEGER DEFAULT 0"]
+  ];
+  for (const item of additions) {
+    if (!columns.has(item[0])) db.exec("ALTER TABLE generations ADD COLUMN " + item[0] + " " + item[1]);
+  }
+}
+migrate();
+
+const DEFAULT_SETTINGS = { concurrency: 2, defaultProviderId: "", priceInputPerM: 0, priceOutputPerM: 0 };
 
 export function getSettings() {
   const rows = db.prepare("SELECT k, v FROM settings").all();
@@ -150,8 +165,27 @@ export function closeDb() {
 }
 
 export function insertGeneration(record) {
-  db.prepare("INSERT INTO generations (id, provider_id, provider_name, mode, prompt, params, files, status, error, latency_ms, usage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(record.id, record.providerId, record.providerName, record.mode, record.prompt, JSON.stringify(record.params || {}), JSON.stringify(record.files || []), record.status, record.error || "", record.latencyMs || 0, JSON.stringify(record.usage || null), record.createdAt);
+  const tokens = record.tokens || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  db.prepare("INSERT INTO generations (id, provider_id, provider_name, mode, prompt, params, files, status, error, latency_ms, usage, created_at, input_tokens, output_tokens, total_tokens, cost_usd, image_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(
+      record.id,
+      record.providerId,
+      record.providerName,
+      record.mode,
+      record.prompt,
+      JSON.stringify(record.params || {}),
+      JSON.stringify(record.files || []),
+      record.status,
+      record.error || "",
+      record.latencyMs || 0,
+      JSON.stringify(record.usage || null),
+      record.createdAt,
+      Number(tokens.inputTokens) || 0,
+      Number(tokens.outputTokens) || 0,
+      Number(tokens.totalTokens) || 0,
+      Number(record.costUsd) || 0,
+      Number(record.imageCount) || 0
+    );
   checkpoint();
 }
 
@@ -175,6 +209,16 @@ function rowToGeneration(row) {
     error: row.error,
     latencyMs: row.latency_ms,
     usage: usage,
+    tokens: {
+      inputTokens: Number(row.input_tokens) || 0,
+      outputTokens: Number(row.output_tokens) || 0,
+      totalTokens: Number(row.total_tokens) || 0
+    },
+    costUsd: estimateCost(
+      { inputTokens: Number(row.input_tokens) || 0, outputTokens: Number(row.output_tokens) || 0 },
+      getSettings()
+    ),
+    imageCount: Number(row.image_count) || 0,
     createdAt: row.created_at
   };
 }
@@ -196,4 +240,67 @@ export function deleteGeneration(id) {
     try { if (full.startsWith(IMAGES_DIR) && fs.existsSync(full)) fs.unlinkSync(full); } catch (e) {}
   }
   return rowToGeneration(row);
+}
+function aggregate(since, providerId) {
+  const where = ["status = 'ok'"];
+  const params = [];
+  if (since) {
+    where.push("created_at >= ?");
+    params.push(since);
+  }
+  if (providerId) {
+    where.push("provider_id = ?");
+    params.push(providerId);
+  }
+  const row = db
+    .prepare(
+      "SELECT COUNT(*) AS requests, COALESCE(SUM(image_count), 0) AS images, COALESCE(SUM(input_tokens), 0) AS inputTokens, COALESCE(SUM(output_tokens), 0) AS outputTokens, COALESCE(SUM(total_tokens), 0) AS totalTokens, COALESCE(SUM(cost_usd), 0) AS costUsd FROM generations WHERE " +
+        where.join(" AND ")
+    )
+    .get(...params);
+  return {
+    requests: Number(row.requests) || 0,
+    images: Number(row.images) || 0,
+    inputTokens: Number(row.inputTokens) || 0,
+    outputTokens: Number(row.outputTokens) || 0,
+    totalTokens: Number(row.totalTokens) || 0,
+    costUsd: Number(row.costUsd) || 0
+  };
+}
+
+export function usageSummary(providerId) {
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const settings = getSettings();
+  const prices = {
+    priceInputPerM: Number(settings.priceInputPerM) || 0,
+    priceOutputPerM: Number(settings.priceOutputPerM) || 0
+  };
+  function withCost(agg) {
+    const cost =
+      (agg.inputTokens / 1000000) * prices.priceInputPerM + (agg.outputTokens / 1000000) * prices.priceOutputPerM;
+    return Object.assign({}, agg, { costUsd: cost });
+  }
+  return {
+    prices: prices,
+    today: withCost(aggregate(dayStart, providerId)),
+    month: withCost(aggregate(monthStart, providerId)),
+    total: withCost(aggregate(null, providerId))
+  };
+}
+
+export function normalizeUsage(raw) {
+  if (!raw || typeof raw !== "object") return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const input = Number(raw.input_tokens != null ? raw.input_tokens : raw.prompt_tokens) || 0;
+  const output = Number(raw.output_tokens != null ? raw.output_tokens : raw.completion_tokens) || 0;
+  const total = Number(raw.total_tokens) || input + output;
+  return { inputTokens: input, outputTokens: output, totalTokens: total };
+}
+
+export function estimateCost(tokens, settings) {
+  const priceInput = Number(settings && settings.priceInputPerM) || 0;
+  const priceOutput = Number(settings && settings.priceOutputPerM) || 0;
+  if (!priceInput && !priceOutput) return 0;
+  return (tokens.inputTokens / 1000000) * priceInput + (tokens.outputTokens / 1000000) * priceOutput;
 }

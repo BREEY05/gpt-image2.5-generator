@@ -2,7 +2,10 @@
   "name": "gpt-image2.5-generator",
   "private": true,
   "version": "0.1.0",
+  "description": "本地优先的 GPT 图像生成工作台（Electron 桌面版，数据保存在用户目录）",
+  "author": "GPT Image Studio",
   "type": "module",
+  "main": "electron/main.mjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
@@ -10,7 +13,10 @@
     "launch": "node scripts/launch.mjs",
     "mock": "node scripts/mock-upstream.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "check:secrets": "node scripts/check-secrets.mjs"
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win --dir",
+    "verify:release": "node scripts/verify-release.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.59.0",
@@ -23,6 +29,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"

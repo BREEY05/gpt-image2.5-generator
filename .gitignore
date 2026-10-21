@@ -3,6 +3,7 @@ server/public/
 data/
 .tmp/
 dist/
+release/
 .env
 .env.*
 *.pem

@@ -39,6 +39,8 @@ export type Params = {
   extra?: Record<string, unknown>;
 };
 
+export type Tokens = { inputTokens: number; outputTokens: number; totalTokens: number };
+
 export type Generation = {
   id: string;
   providerId: string;
@@ -51,10 +53,48 @@ export type Generation = {
   error: string;
   latencyMs: number;
   usage: unknown;
+  tokens?: Tokens;
+  costUsd?: number;
+  imageCount?: number;
   createdAt: number;
 };
 
-export type Settings = { concurrency: number; defaultProviderId: string };
+export type Settings = {
+  concurrency: number;
+  defaultProviderId: string;
+  priceInputPerM: number;
+  priceOutputPerM: number;
+};
+
+export type UsageAgg = {
+  requests: number;
+  images: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+};
+
+export type UsageSummary = {
+  prices: { priceInputPerM: number; priceOutputPerM: number };
+  today: UsageAgg;
+  month: UsageAgg;
+  total: UsageAgg;
+};
+
+export type Quota = {
+  available: boolean;
+  source?: string;
+  label?: string;
+  currency?: string;
+  limit?: number | null;
+  used?: number | null;
+  remaining?: number | null;
+  checkedAt: number;
+  message?: string;
+  hint?: string;
+  tried?: string[];
+};
 
 export type AppState = {
   providers: Provider[];
@@ -108,4 +148,18 @@ export function formatMs(ms: number): string {
   if (!ms) return "";
   if (ms < 1000) return ms + "ms";
   return (ms / 1000).toFixed(1) + "s";
+}
+
+export function formatTokens(n: number): string {
+  const value = Number(n) || 0;
+  if (value >= 1000000) return (value / 1000000).toFixed(2) + "M";
+  if (value >= 1000) return (value / 1000).toFixed(1) + "k";
+  return String(value);
+}
+
+export function formatUsd(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  const value = Number(n);
+  if (value !== 0 && Math.abs(value) < 0.01) return "$" + value.toFixed(4);
+  return "$" + value.toFixed(2);
 }
