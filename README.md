@@ -22,7 +22,7 @@
 
 ### 方式一：下载安装包（.exe，推荐）
 
-1. 到 GitHub Releases 页面下载 GPT-Image-Studio-0.1.0-Setup.exe
+1. 到 GitHub Releases 页面下载 GPT-Image-Studio-<版本>-Setup.exe（当前 0.1.0）
 2. 双击安装：**每用户安装**，不需要管理员权限，可以自选安装目录
 3. 装完桌面会有「GPT Image Studio」图标，开始菜单里也有；双击即可启动，不需要 Node.js
 4. 首次启动会自动在 %APPDATA%\GPT Image Studio\data 建立全新的空数据库
@@ -209,6 +209,7 @@
       src/theme.ts         深色/浅色/跟随系统
       src/components/      提供方、参数面板、结果、历史、设置
     scripts/
+      release.mjs          一条命令：构建 + 打包 + 验证
       launch.mjs           启动器：自检、构建、起服务、开浏览器
       dev.mjs              同时起后端和 vite
       mock-upstream.mjs    本地假 OpenAI
@@ -216,6 +217,8 @@
       check-secrets.mjs    提交前扫描密钥
       seed-demo.mjs        造演示数据
     data/                  运行后生成，已 gitignore
+    docs/MAINTENANCE.md    维护与发版指南（新增模型怎么改 / 怎么重新打包）
+    electron/              Electron 主进程与打包钩子
     LICENSE                MIT
 
 ---
@@ -224,7 +227,17 @@
 
     pnpm smoke
 
-自动拉起 mock 与 app（8790 端口），覆盖健康检查、Provider CRUD、Key 掩码、连通性、模型过滤、生成、落盘、静态图片、历史、401 透传、空提示词拦截、设置持久化、明文 Key 检查、删除、路径穿越防护，共 27 项断言。
+自动拉起 mock 与 app（8790 端口），覆盖健康检查、Provider CRUD、Key 掩码、连通性、模型过滤、生成、落盘、静态图片、历史、401 透传、空提示词拦截、设置持久化、明文 Key 检查、删除、路径穿越防护，共 31 项断言。
+
+### 重新打包 / 发版
+
+    pnpm release            # 构建前端 + 打 NSIS 安装包 + 验证
+    pnpm release patch      # 版本号 +1 后打包（minor / x.y.z 同理）
+
+产物在 release/，上传到 GitHub Releases 即可。打包会自动使用国内镜像下载 Electron（可用 ELECTRON_MIRROR 覆盖）。
+
+**模型更新、接口变更、版本发布的完整流程见 [docs/MAINTENANCE.md](docs/MAINTENANCE.md)。**
+
 
 ---
 

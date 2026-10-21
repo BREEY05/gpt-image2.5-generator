@@ -16,7 +16,8 @@
     "check:secrets": "node scripts/check-secrets.mjs",
     "dist": "electron-builder --win nsis",
     "dist:dir": "electron-builder --win --dir",
-    "verify:release": "node scripts/verify-release.mjs"
+    "verify:release": "node scripts/verify-release.mjs",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.59.0",
