@@ -5,6 +5,9 @@
  * no production npm dependencies are needed at runtime. electron-builder still
  * collects package.json "dependencies"; drop them so the installed payload is
  * just our own code and the static frontend.
+ *
+ * Note: resources/elevate.exe (~100 KB) is added by electron-builder during the
+ * NSIS step, i.e. after this hook runs, so it cannot be removed from here.
  */
 import fs from "node:fs";
 import path from "node:path";

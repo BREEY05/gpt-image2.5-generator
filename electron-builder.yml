@@ -30,7 +30,12 @@ files:
 npmRebuild: false
 nodeGypRebuild: false
 removePackageScripts: true
-compression: normal
+compression: maximum
+# Chromium ships 55 locale packs (~49 MB). The UI is Chinese/only English fallback,
+# so keep just these two and cut ~46 MB from the unpacked app.
+electronLanguages:
+  - zh-CN
+  - en-US
 afterPack: electron/after-pack.mjs
 artifactName: GPT-Image-Studio-${version}-Setup.${ext}
 

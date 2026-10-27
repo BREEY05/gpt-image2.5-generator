@@ -22,7 +22,7 @@
 
 ### 方式一：下载安装包（.exe，推荐）
 
-1. 到 GitHub Releases 页面下载 GPT-Image-Studio-<版本>-Setup.exe（当前 0.1.0）
+1. 到 GitHub Releases 页面下载 GPT-Image-Studio-<版本>-Setup.exe（当前 0.1.1）
 2. 双击安装：**每用户安装**，不需要管理员权限，可以自选安装目录
 3. 装完桌面会有「GPT Image Studio」图标，开始菜单里也有；双击即可启动，不需要 Node.js
 4. 首次启动会自动在 %APPDATA%\GPT Image Studio\data 建立全新的空数据库

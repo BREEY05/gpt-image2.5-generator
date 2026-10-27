@@ -1,7 +1,7 @@
 {
   "name": "gpt-image2.5-generator",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "本地优先的 GPT 图像生成工作台（Electron 桌面版，数据保存在用户目录）",
   "author": "GPT Image Studio",
   "type": "module",

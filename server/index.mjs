@@ -16,7 +16,17 @@ import { normalizeBaseUrl, probeModels, runTest, generateImages, editImages, Api
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const PUBLIC_DIR = path.join(ROOT, "server", "public");
-const VERSION = "0.1.0";
+
+function readVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    return String(pkg.version || "0.0.0");
+  } catch (e) {
+    return "0.0.0";
+  }
+}
+
+const VERSION = readVersion();
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
