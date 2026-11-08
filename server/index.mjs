@@ -92,6 +92,8 @@ function decodeDataUrl(input) {
   return { buf: buf, mime: mime };
 }
 
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+
 const queue = { active: 0, waiting: [] };
 async function withLimit(limit, fn) {
   if (queue.active >= limit) {
@@ -225,15 +227,24 @@ async function handleGenerate(req, res) {
   const started = Date.now();
   const limit = Math.max(1, Math.min(8, Number(getSettings().concurrency) || 2));
 
-  let imageBuf = null;
-  let imageMime = "image/png";
+  let imageList = [];
   let maskBuf = null;
   let maskMime = "image/png";
   if (mode === "edit") {
-    const image = decodeDataUrl(body.image);
-    if (!image) return json(res, 400, { error: { message: "编辑模式需要先上传一张参考图" } });
-    imageBuf = image.buf;
-    imageMime = image.mime;
+    const raw = Array.isArray(body.images) ? body.images : body.image ? [body.image] : [];
+    if (!raw.length) return json(res, 400, { error: { message: "编辑模式需要至少一张参考图" } });
+    if (raw.length > 16) return json(res, 400, { error: { message: "最多 16 张参考图" } });
+    imageList = [];
+    for (let i = 0; i < raw.length; i += 1) {
+      const decoded = decodeDataUrl(raw[i]);
+      if (!decoded) {
+        return json(res, 400, { error: { message: "第 " + (i + 1) + " 张参考图不是有效的图片数据" } });
+      }
+      if (decoded.buf.length > MAX_IMAGE_BYTES) {
+        return json(res, 400, { error: { message: "第 " + (i + 1) + " 张参考图超过 50MB 上限" } });
+      }
+      imageList.push({ buf: decoded.buf, mime: decoded.mime, name: "image-" + (i + 1) + ".png" });
+    }
     const mask = decodeDataUrl(body.mask);
     if (mask) {
       maskBuf = mask.buf;
@@ -244,7 +255,7 @@ async function handleGenerate(req, res) {
   try {
     const out = await withLimit(limit, function () {
       return retry(function () {
-        if (mode === "edit") return editImages(provider, apiKey, fields, imageBuf, imageMime, maskBuf, maskMime);
+        if (mode === "edit") return editImages(provider, apiKey, fields, imageList, maskBuf, maskMime);
         return generateImages(provider, apiKey, fields);
       }, 3);
     });

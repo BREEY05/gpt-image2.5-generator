@@ -86,18 +86,54 @@ function sizeOf(value) {
   return { w: w - (w % 16), h: h - (h % 16) };
 }
 
-function readJson(req) {
+function readRaw(req) {
   return new Promise((resolve) => {
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
-    req.on("end", () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
-      } catch (e) {
-        resolve({});
-      }
-    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
   });
+}
+
+function readJson(req) {
+  return readRaw(req).then((buf) => {
+    try {
+      return JSON.parse(buf.toString("utf8") || "{}");
+    } catch (e) {
+      return {};
+    }
+  });
+}
+
+// 极简 multipart 解析：只取文本字段、图片 part 数量、image[] 字段数量
+function parseMultipart(buf, contentType) {
+  const match = /boundary=("?)([^";]+)\1/.exec(String(contentType || ""));
+  if (!match) return { fields: {}, imageCount: 0, arrayCount: 0 };
+  const marker = Buffer.from("--" + match[2]);
+  const fields = {};
+  let imageCount = 0;
+  let arrayCount = 0;
+  let pos = buf.indexOf(marker);
+  while (pos !== -1) {
+    let start = pos + marker.length;
+    if (buf[start] === 0x2d && buf[start + 1] === 0x2d) break;
+    if (buf[start] === 0x0d && buf[start + 1] === 0x0a) start += 2;
+    const next = buf.indexOf(marker, start);
+    if (next === -1 || next < start) break;
+    const part = buf.subarray(start, next - 2);
+    const sep = part.indexOf("\r\n\r\n");
+    if (sep !== -1) {
+      const head = part.subarray(0, sep).toString("utf8");
+      const body = part.subarray(sep + 4);
+      const nameMatch = /name="([^"]*)"/.exec(head);
+      const name = nameMatch ? nameMatch[1] : "";
+      const isFile = /filename=/.test(head);
+      if (isFile && name.indexOf("image[]") === 0) arrayCount += 1;
+      else if (isFile && name.indexOf("image") === 0) imageCount += 1;
+      else if (name) fields[name] = body.toString("utf8");
+    }
+    pos = next;
+  }
+  return { fields: fields, imageCount: imageCount, arrayCount: arrayCount };
 }
 
 function send(res, status, payload) {
@@ -128,8 +164,29 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && (url.pathname.endsWith("/images/generations") || url.pathname.endsWith("/images/edits"))) {
-    const body = await readJson(req);
+    const isEdits = url.pathname.endsWith("/images/edits");
+    const isMultipart = /multipart\/form-data/i.test(String(req.headers["content-type"] || ""));
+    let body = {};
+    let imageCount = 0;
+    let arrayCount = 0;
+    if (isMultipart) {
+      const parsed = parseMultipart(await readRaw(req), req.headers["content-type"]);
+      body = parsed.fields;
+      imageCount = parsed.imageCount;
+      arrayCount = parsed.arrayCount;
+    } else {
+      body = await readJson(req);
+    }
     const prompt = String(body.prompt || "");
+    if (isEdits && prompt.indexOf("EXPECT2") !== -1 && imageCount !== 2) {
+      return send(res, 400, { error: { message: "mock: expected 2 images, got " + imageCount } });
+    }
+    if (isEdits && prompt.indexOf("EXPECT1") !== -1 && imageCount !== 1) {
+      return send(res, 400, { error: { message: "mock: expected 1 image, got " + imageCount } });
+    }
+    if (isEdits && prompt.indexOf("MOCKBADARRAY") !== -1 && arrayCount > 0) {
+      return send(res, 400, { error: { message: "mock: unsupported image[] field, use repeated image field" } });
+    }
     if (prompt.indexOf("MOCK401") !== -1) return send(res, 401, { error: { message: "Incorrect API key provided: sk-mock", type: "invalid_request_error" } });
     if (prompt.indexOf("MOCK429") !== -1) return send(res, 429, { error: { message: "Rate limit reached for images per min", type: "rate_limit_error" } });
     if (prompt.indexOf("MOCK500") !== -1) return send(res, 500, { error: { message: "The server had an error while processing your request", type: "server_error" } });

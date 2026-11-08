@@ -147,24 +147,47 @@ export async function generateImages(provider, apiKey, body, timeoutMs) {
   return collectImages(payload);
 }
 
-export async function editImages(provider, apiKey, fields, imageBuf, imageMime, maskBuf, maskMime, timeoutMs) {
+export async function editImages(provider, apiKey, fields, images, maskBuf, maskMime, timeoutMs) {
   const url = normalizeBaseUrl(provider.baseUrl) + "/images/edits";
-  const form = new FormData();
-  Object.keys(fields || {}).forEach(function (key) {
-    if (fields[key] != null && fields[key] !== "") form.append(key, String(fields[key]));
-  });
-  form.append("image", new Blob([imageBuf], { type: imageMime || "image/png" }), "image.png");
-  if (maskBuf) form.append("mask", new Blob([maskBuf], { type: maskMime || "image/png" }), "mask.png");
+  const list = Array.isArray(images) ? images : [];
+  if (!list.length) throw new ApiError("编辑模式需要至少一张参考图");
+
+  const build = function (fieldName) {
+    const form = new FormData();
+    Object.keys(fields || {}).forEach(function (key) {
+      if (fields[key] != null && fields[key] !== "") form.append(key, String(fields[key]));
+    });
+    list.forEach(function (item, index) {
+      const buf = item && item.buf ? item.buf : item;
+      const mime = (item && item.mime) || "image/png";
+      const name = (item && item.name) || "image-" + (index + 1) + ".png";
+      form.append(fieldName, new Blob([buf], { type: mime }), name);
+    });
+    if (maskBuf) form.append("mask", new Blob([maskBuf], { type: maskMime || "image/png" }), "mask.png");
+    return form;
+  };
 
   const headers = authHeaders(provider, apiKey);
   delete headers["Content-Type"];
-  const res = await request(url, { method: "POST", headers: headers, body: form }, timeoutMs || IMAGE_TIMEOUT);
-  const text = await res.text();
-  let payload = null;
-  try { payload = JSON.parse(text); } catch (e) {}
-  if (!res.ok) throw toApiError(res, text, payload);
-  if (!payload) throw new ApiError("接口返回的不是 JSON（可能是 HTML 页面）", { hint: "检查 Base URL 是否指向 API" });
-  return collectImages(payload);
+  const send = async function (fieldName) {
+    const res = await request(url, { method: "POST", headers: headers, body: build(fieldName) }, timeoutMs || IMAGE_TIMEOUT);
+    const text = await res.text();
+    let payload = null;
+    try { payload = JSON.parse(text); } catch (e) {}
+    return { res: res, text: text, payload: payload };
+  };
+
+  // 单图沿用 image 字段（兼容全部中转）；多图按 OpenAI 官方 SDK 的数组编码用 image[]。
+  // 个别中转只认重复的 image 字段，遇到 400 且错误提到 image 时自动回退重试一次。
+  let fieldName = list.length === 1 ? "image" : "image[]";
+  let out = await send(fieldName);
+  if (!out.res.ok && list.length > 1 && out.res.status === 400) {
+    const msg = String((out.payload && out.payload.error && out.payload.error.message) || out.text || "");
+    if (/image/i.test(msg)) out = await send("image");
+  }
+  if (!out.res.ok) throw toApiError(out.res, out.text, out.payload);
+  if (!out.payload) throw new ApiError("接口返回的不是 JSON（可能是 HTML 页面）", { hint: "检查 Base URL 是否指向 API" });
+  return collectImages(out.payload);
 }
 
 async function collectImages(payload) {

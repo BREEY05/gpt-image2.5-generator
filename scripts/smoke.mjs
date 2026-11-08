@@ -8,6 +8,7 @@ const dataDir = path.join(root, ".tmp", "smoke-data");
 fs.rmSync(dataDir, { recursive: true, force: true });
 
 const APP = "http://127.0.0.1:8790";
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const failures = [];
 const children = [];
 
@@ -147,6 +148,36 @@ async function main() {
   assert(r.status === 200 && r.json.settings.priceOutputPerM === 40, "保存 token 单价", r.json);
   r = await req("/api/usage?providerId=" + providerId);
   assert(r.status === 200 && r.json.today.costUsd > 0, "按单价估算花费", r.json && r.json.today);
+
+  const tiny = "data:image/png;base64," + TINY_PNG;
+  const editParams = { model: "gpt-image-2.5-sunburst", size: "1024x1024", quality: "low", n: 1, output_format: "png", background: "auto" };
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "EXPECT2 two references", mode: "edit", images: [tiny, tiny], params: editParams })
+  });
+  assert(r.status === 200 && r.json.generation && r.json.generation.mode === "edit" && r.json.generation.files.length === 1, "多参考图编辑（2 张）", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "EXPECT1 legacy single", mode: "edit", image: tiny, params: editParams })
+  });
+  assert(r.status === 200 && r.json.generation && r.json.generation.mode === "edit", "旧版单图字段 image 兼容", r.json && r.json.error);
+
+  r = await req("/api/generate", { method: "POST", body: JSON.stringify({ providerId: providerId, prompt: "no image", mode: "edit", params: editParams }) });
+  assert(r.status === 400 && r.json.error.message.indexOf("参考图") !== -1, "编辑模式无参考图被拦截", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "too many", mode: "edit", images: new Array(17).fill(tiny), params: editParams })
+  });
+  assert(r.status === 400 && r.json.error.message.indexOf("16") !== -1, "超过 16 张参考图被拦截", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "MOCKBADARRAY fallback", mode: "edit", images: [tiny, tiny], params: editParams })
+  });
+  assert(r.status === 200 && r.json.generation, "image[] 不被接受时回退为重复 image 字段", r.json && r.json.error);
 
   r = await req("/api/generate", {
     method: "POST",

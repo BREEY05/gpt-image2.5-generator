@@ -110,7 +110,7 @@ export type GeneratePayload = {
   prompt: string;
   mode: "generate" | "edit";
   params: Params;
-  image?: string;
+  images?: string[];
   mask?: string;
 };
 

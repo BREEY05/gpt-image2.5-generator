@@ -39,10 +39,15 @@ const QUALITY_LABELS: Record<string, string> = {
   auto: "自动"
 };
 
-function readAsDataUrl(file: File, onDone: (value: string) => void) {
-  const reader = new FileReader();
-  reader.onload = () => onDone(String(reader.result || ""));
-  reader.readAsDataURL(file);
+const MAX_IMAGES = 16;
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取图片失败"));
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function Composer(props: {
@@ -67,8 +72,9 @@ export default function Composer(props: {
   const [advanced, setAdvanced] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [advancedError, setAdvancedError] = useState<string | null>(null);
-  const [image, setImage] = useState<string | null>(null);
+  const [images, setImages] = useState<string[]>([]);
   const [mask, setMask] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const imageInput = useRef<HTMLInputElement | null>(null);
@@ -118,6 +124,39 @@ export default function Composer(props: {
     }
   }
 
+  async function addImages(list: FileList | File[] | null | undefined) {
+    if (!list) return;
+    const picked = Array.from(list).filter((file) => file.type.indexOf("image/") === 0);
+    if (!picked.length) {
+      setAdvancedError("请选择图片文件（PNG / JPEG / WebP）");
+      return;
+    }
+    const room = MAX_IMAGES - images.length;
+    if (room <= 0) {
+      setAdvancedError("最多 " + MAX_IMAGES + " 张参考图，请先移除一些");
+      return;
+    }
+    try {
+      const urls = await Promise.all(picked.slice(0, room).map(fileToDataUrl));
+      setImages((prev) => prev.concat(urls).slice(0, MAX_IMAGES));
+      setAdvancedError(picked.length > room ? "最多 " + MAX_IMAGES + " 张参考图，多余的已忽略" : null);
+    } catch (e) {
+      setAdvancedError("图片读取失败，请换一张试试");
+    }
+  }
+
+  function removeImage(index: number) {
+    setImages((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function moveToFirst(index: number) {
+    setImages((prev) => {
+      const next = prev.slice();
+      const picked = next.splice(index, 1);
+      return picked.concat(next);
+    });
+  }
+
   function submit() {
     if (!props.provider || !prompt.trim() || props.busy) return;
     let extra: Record<string, unknown> | undefined;
@@ -134,8 +173,8 @@ export default function Composer(props: {
         return;
       }
     }
-    if (mode === "edit" && !image) {
-      setAdvancedError("编辑模式需要先上传参考图");
+    if (mode === "edit" && !images.length) {
+      setAdvancedError("编辑模式需要先添加参考图");
       return;
     }
     setAdvancedError(null);
@@ -154,13 +193,13 @@ export default function Composer(props: {
       prompt: prompt.trim(),
       mode,
       params,
-      image: mode === "edit" && image ? image : undefined,
+      images: mode === "edit" && images.length ? images : undefined,
       mask: mode === "edit" && mask ? mask : undefined
     });
   }
 
   const options = Array.from(new Set([...(props.presets || []).map((p) => p.id), ...models, model].filter(Boolean)));
-  const canGenerate = !!props.provider && !!prompt.trim() && !props.busy && (mode !== "edit" || !!image);
+  const canGenerate = !!props.provider && !!prompt.trim() && !props.busy && (mode !== "edit" || images.length > 0);
 
   return (
     <section className="flex w-[424px] shrink-0 flex-col border-r border-line bg-panel">
@@ -224,63 +263,89 @@ export default function Composer(props: {
         </div>
 
         {mode === "edit" ? (
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => imageInput.current && imageInput.current.click()}
-              className="group relative flex h-24 items-center justify-center overflow-hidden rounded-xl border border-dashed border-line2 bg-surface transition hover:border-violet-500/50"
-            >
-              {image ? (
-                <>
-                  <img src={image} alt="参考图" className="h-full w-full object-cover" />
-                  <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
-                    <Trash2
-                      className="h-4 w-4 text-danger"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setImage(null);
-                      }}
-                    />
-                  </span>
-                </>
-              ) : (
-                <span className="flex flex-col items-center gap-1 text-[11px] text-dim">
-                  <ImagePlus className="h-4 w-4" />
-                  上传参考图
-                </span>
+          <div>
+            <div
+              onDragOver={(e) => {
+                if (Array.from(e.dataTransfer.types).indexOf("Files") !== -1) {
+                  e.preventDefault();
+                  setDragging(true);
+                }
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                addImages(e.dataTransfer.files);
+              }}
+              data-dropzone="reference"
+              className={cn(
+                "rounded-xl border border-dashed p-2 transition",
+                dragging ? "border-violet-500/70 bg-violet-500/10" : "border-line2 bg-surface"
               )}
-            </button>
-            <button
-              onClick={() => maskInput.current && maskInput.current.click()}
-              className="group relative flex h-24 items-center justify-center overflow-hidden rounded-xl border border-dashed border-line2 bg-surface transition hover:border-violet-500/50"
             >
-              {mask ? (
-                <>
+              <div className="grid grid-cols-3 gap-2">
+                {images.map((src, index) => (
+                  <div key={index} className="group relative aspect-square overflow-hidden rounded-lg border border-line2 bg-app">
+                    <img src={src} alt={"参考图 " + (index + 1)} className="h-full w-full object-cover" />
+                    {index === 0 ? (
+                      <span className="absolute left-1 top-1 rounded bg-violet-500/85 px-1 py-0.5 text-[9px] leading-none text-white">首图</span>
+                    ) : null}
+                    <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 bg-black/60 py-1 opacity-0 transition group-hover:opacity-100">
+                      {index > 0 ? (
+                        <button title="设为首图" onClick={() => moveToFirst(index)} className="text-[10px] text-white/85 hover:text-white">
+                          ⇤ 首图
+                        </button>
+                      ) : null}
+                      <button title="移除这张" onClick={() => removeImage(index)} className="text-white/85 hover:text-white">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {images.length < MAX_IMAGES ? (
+                  <button
+                    onClick={() => imageInput.current && imageInput.current.click()}
+                    className="flex aspect-square flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-line2 text-[10.5px] text-dim transition hover:border-violet-500/50 hover:text-soft"
+                  >
+                    <ImagePlus className="h-4 w-4" />
+                    {images.length ? "再加一张" : "添加参考图"}
+                  </button>
+                ) : null}
+              </div>
+              <p className="mt-2 text-[10.5px] leading-relaxed text-faint">
+                拖入图片或点击添加，最多 {MAX_IMAGES} 张；第一张是主图。
+              </p>
+            </div>
+            <div className="mt-2 flex items-center gap-2 rounded-lg border border-line bg-app px-2 py-1.5">
+              <button
+                onClick={() => maskInput.current && maskInput.current.click()}
+                className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-dashed border-line2 bg-surface"
+              >
+                {mask ? (
                   <img src={mask} alt="遮罩" className="h-full w-full object-cover" />
-                  <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
-                    <Trash2
-                      className="h-4 w-4 text-danger"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMask(null);
-                      }}
-                    />
-                  </span>
-                </>
-              ) : (
-                <span className="flex flex-col items-center gap-1 text-[11px] text-dim">
-                  <ImagePlus className="h-4 w-4" />
-                  遮罩（可选）
-                </span>
-              )}
-            </button>
+                ) : (
+                  <ImagePlus className="h-3.5 w-3.5 text-dim" />
+                )}
+              </button>
+              <div className="min-w-0 flex-1 text-[10.5px] leading-tight text-faint">
+                {mask ? "遮罩已选择，只作用于首图" : "遮罩（可选）：透明区域＝要修改的地方，仅对首图生效"}
+              </div>
+              {mask ? (
+                <button onClick={() => setMask(null)} className="shrink-0 text-[10.5px] text-danger hover:underline">
+                  移除
+                </button>
+              ) : null}
+            </div>
             <input
               ref={imageInput}
               type="file"
               accept="image/png,image/jpeg,image/webp"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const file = e.target.files && e.target.files[0];
-                if (file) readAsDataUrl(file, setImage);
+                addImages(e.target.files);
                 e.target.value = "";
               }}
             />
@@ -291,7 +356,7 @@ export default function Composer(props: {
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files && e.target.files[0];
-                if (file) readAsDataUrl(file, setMask);
+                if (file) fileToDataUrl(file).then(setMask).catch(() => setAdvancedError("遮罩读取失败"));
                 e.target.value = "";
               }}
             />
