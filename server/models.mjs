@@ -1,7 +1,34 @@
-export const SIZE_PRESETS = ["1024x1024", "1536x1024", "1024x1536", "2048x2048", "2560x1440"];
+export const SIZE_PRESETS = ["512x512", "1024x1024", "1536x1024", "1024x1536", "2048x2048", "2560x1440"];
+
+// 能力标记：complexity = 2.5+ 的 complexity 参数；gif / svg = 新输出格式；markup = 标记层编辑
+const NEW_CAPS = { complexity: true, gif: true, svg: true, markup: true };
 
 export const PRESET_MODELS = [
-  {
+  Object.assign({
+    id: "gpt-image-2.6-sunburst",
+    label: "GPT-Image-2.6 Sunburst",
+    note: "最新 · 细节与参考图还原优先",
+    family: "2.6",
+    quality: ["low", "medium", "high", "xhigh", "max", "auto"],
+    customSize: true,
+    maxN: 10,
+    formats: ["png", "jpeg", "webp", "gif", "svg"],
+    background: true,
+    edit: true
+  }, NEW_CAPS),
+  Object.assign({
+    id: "gpt-image-2.6-flare",
+    label: "GPT-Image-2.6 Flare",
+    note: "最新 · 速度优先",
+    family: "2.6",
+    quality: ["low", "medium", "high", "xhigh", "max", "auto"],
+    customSize: true,
+    maxN: 10,
+    formats: ["png", "jpeg", "webp", "gif", "svg"],
+    background: true,
+    edit: true
+  }, NEW_CAPS),
+  Object.assign({
     id: "gpt-image-2.5-sunburst",
     label: "GPT-Image-2.5 Sunburst",
     note: "最强，编辑精度优先",
@@ -9,11 +36,11 @@ export const PRESET_MODELS = [
     quality: ["low", "medium", "high", "xhigh", "max", "auto"],
     customSize: true,
     maxN: 10,
-    formats: ["png", "jpeg", "webp"],
+    formats: ["png", "jpeg", "webp", "gif", "svg"],
     background: true,
     edit: true
-  },
-  {
+  }, NEW_CAPS),
+  Object.assign({
     id: "gpt-image-2.5-flare",
     label: "GPT-Image-2.5 Flare",
     note: "最快，日常出图",
@@ -21,10 +48,10 @@ export const PRESET_MODELS = [
     quality: ["low", "medium", "high", "xhigh", "max", "auto"],
     customSize: true,
     maxN: 10,
-    formats: ["png", "jpeg", "webp"],
+    formats: ["png", "jpeg", "webp", "gif", "svg"],
     background: true,
     edit: true
-  },
+  }, NEW_CAPS),
   {
     id: "gpt-image-2",
     label: "GPT-Image-2",
@@ -52,7 +79,7 @@ export const PRESET_MODELS = [
   {
     id: "gpt-image-1",
     label: "GPT-Image-1",
-    note: "通用",
+    note: "已于 2026-10-23 关停，建议换 2.5 / 2.6",
     family: "1",
     quality: ["low", "medium", "high"],
     customSize: false,
@@ -84,7 +111,11 @@ export const DEFAULT_CAPS = {
   maxN: 4,
   formats: ["png", "jpeg", "webp"],
   background: true,
-  edit: true
+  edit: true,
+  complexity: false,
+  gif: false,
+  svg: false,
+  markup: true
 };
 
 export function capsFor(model) {
@@ -107,6 +138,9 @@ export function defaultParams(model) {
     output_format: "png",
     background: "auto",
     output_compression: 100,
-    moderation: "auto"
+    moderation: "auto",
+    complexity: "auto",
+    frame_count: 9,
+    frame_duration_ms: 200
   };
 }

@@ -123,15 +123,40 @@ async function retry(fn, times) {
   throw lastError;
 }
 
-function saveImages(images, format) {
-  const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png";
+// 识别上游实际返回的格式：中转可能忽略 gif / svg，按真实内容落盘才不会被存成错扩展名
+function sniffFormat(buf) {
+  if (!buf || !buf.length) return "";
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "png";
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpeg";
+  if (buf.length >= 6) {
+    const magic = buf.slice(0, 6).toString("ascii");
+    if (magic === "GIF89a" || magic === "GIF87a") return "gif";
+  }
+  if (buf.length >= 12 && buf.slice(0, 4).toString("ascii") === "RIFF" && buf.slice(8, 12).toString("ascii") === "WEBP") return "webp";
+  const head = buf.slice(0, 512).toString("utf8").trim().toLowerCase();
+  if (head.indexOf("<svg") !== -1) return "svg";
+  return "";
+}
+
+function extForFormat(format) {
+  if (format === "jpeg") return "jpg";
+  if (format === "webp") return "webp";
+  if (format === "gif") return "gif";
+  if (format === "svg") return "svg";
+  return "png";
+}
+
+function saveImages(images, requestedFormat) {
   const files = [];
+  const actual = [];
   for (const image of images) {
-    const name = crypto.randomUUID() + "." + ext;
+    const detected = sniffFormat(image.buf) || requestedFormat || "png";
+    const name = crypto.randomUUID() + "." + extForFormat(detected);
     fs.writeFileSync(path.join(IMAGES_DIR, name), image.buf);
     files.push("/files/" + name);
+    actual.push(detected);
   }
-  return files;
+  return { files: files, actual: actual };
 }
 
 function buildState() {
@@ -204,14 +229,37 @@ async function handleGenerate(req, res) {
     return json(res, 400, { error: { message: "尺寸格式应为 宽x高，例如 1024x1024" } });
   }
 
-  let format = ["png", "jpeg", "webp"].indexOf(String(params.output_format)) !== -1 ? String(params.output_format) : "png";
+  const ALLOWED_FORMATS = ["png", "jpeg", "webp", "gif", "svg"];
+  let format = ALLOWED_FORMATS.indexOf(String(params.output_format)) !== -1 ? String(params.output_format) : "png";
   let background = String(params.background || "auto");
   if (background === "transparent" && format === "jpeg") {
     format = "png";
     background = "auto";
   }
+  // GIF / SVG 不支持背景参数；SVG 官方要求 n=1，GIF 一次只产出一段动画
+  if (format === "gif" || format === "svg") background = "auto";
+  const count = format === "gif" || format === "svg" ? 1 : n;
 
-  const fields = { model: model, prompt: prompt, n: n, size: size };
+  let frameCount = null;
+  let frameDurationMs = null;
+  if (format === "gif") {
+    if (params.frame_count != null && params.frame_count !== "") {
+      const value = Number(params.frame_count);
+      if (!Number.isFinite(value) || value < 2 || value > 16) {
+        return json(res, 400, { error: { message: "GIF 帧数需在 2–16 之间" } });
+      }
+      frameCount = Math.round(value);
+    }
+    if (params.frame_duration_ms != null && params.frame_duration_ms !== "") {
+      const value = Number(params.frame_duration_ms);
+      if (!Number.isFinite(value) || value <= 0) {
+        return json(res, 400, { error: { message: "GIF 帧间隔需为正数（毫秒）" } });
+      }
+      frameDurationMs = Math.max(10, Math.min(655350, Math.round(value / 10) * 10));
+    }
+  }
+
+  const fields = { model: model, prompt: prompt, n: count, size: size };
   if (params.quality) fields.quality = String(params.quality);
   fields.output_format = format;
   if (background !== "auto") fields.background = background;
@@ -219,6 +267,11 @@ async function handleGenerate(req, res) {
     fields.output_compression = Math.max(0, Math.min(100, Number(params.output_compression) || 100));
   }
   if (params.moderation && params.moderation !== "auto") fields.moderation = String(params.moderation);
+  if (params.complexity && ["low", "medium", "high"].indexOf(String(params.complexity)) !== -1) {
+    fields.complexity = String(params.complexity);
+  }
+  if (frameCount != null) fields.frame_count = frameCount;
+  if (frameDurationMs != null) fields.frame_duration_ms = frameDurationMs;
   if (params.extra && typeof params.extra === "object") {
     Object.keys(params.extra).forEach(function (key) { fields[key] = params.extra[key]; });
   }
@@ -230,6 +283,8 @@ async function handleGenerate(req, res) {
   let imageList = [];
   let maskBuf = null;
   let maskMime = "image/png";
+  let markupBuf = null;
+  let markupMime = "image/png";
   if (mode === "edit") {
     const raw = Array.isArray(body.images) ? body.images : body.image ? [body.image] : [];
     if (!raw.length) return json(res, 400, { error: { message: "编辑模式需要至少一张参考图" } });
@@ -247,19 +302,41 @@ async function handleGenerate(req, res) {
     }
     const mask = decodeDataUrl(body.mask);
     if (mask) {
+      if (format === "gif") {
+        return json(res, 400, { error: { message: "GIF 动图不支持遮罩（mask），请改用 PNG / JPEG / WebP" } });
+      }
       maskBuf = mask.buf;
       maskMime = mask.mime;
+    }
+    const markup = decodeDataUrl(body.markup);
+    if (markup) {
+      if (markup.buf.length > MAX_IMAGE_BYTES) {
+        return json(res, 400, { error: { message: "标记图层超过 50MB 上限" } });
+      }
+      if (markup.mime.indexOf("png") === -1) {
+        return json(res, 400, { error: { message: "标记图层需要是透明 PNG（尺寸与首图一致）" } });
+      }
+      if (maskBuf) {
+        return json(res, 400, { error: { message: "遮罩与标记图层不能同时使用，二选一即可" } });
+      }
+      markupBuf = markup.buf;
+      markupMime = markup.mime;
     }
   }
 
   try {
     const out = await withLimit(limit, function () {
       return retry(function () {
-        if (mode === "edit") return editImages(provider, apiKey, fields, imageList, maskBuf, maskMime);
+        if (mode === "edit") return editImages(provider, apiKey, fields, imageList, maskBuf, maskMime, markupBuf, markupMime);
         return generateImages(provider, apiKey, fields);
       }, 3);
     });
-    const files = saveImages(out.images, format);
+    const saved = saveImages(out.images, format);
+    const files = saved.files;
+    const actualFormats = Array.from(new Set(saved.actual));
+    const formatNote = actualFormats.length && actualFormats.some(function (f) { return f !== format; })
+      ? "上游实际返回 " + actualFormats.map(function (f) { return f.toUpperCase(); }).join(" / ") + "，请求的是 " + format.toUpperCase() + "：该中转可能还不支持这个格式"
+      : "";
     const tokens = normalizeUsage(out.usage);
     const record = {
       id: crypto.randomUUID(),
@@ -269,6 +346,8 @@ async function handleGenerate(req, res) {
       prompt: prompt,
       params: fields,
       files: files,
+      outputFormatActual: actualFormats[0] || format,
+      formatNote: formatNote,
       status: "ok",
       error: "",
       latencyMs: Date.now() - started,

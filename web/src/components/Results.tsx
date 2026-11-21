@@ -1,8 +1,55 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Clock, Cpu, Download, Image as ImageIcon, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, Clock, Copy, Cpu, Download, Image as ImageIcon, Sparkles, X } from "lucide-react";
 import type { Generation } from "../types";
 import { formatMs, formatTime, formatTokens, formatUsd } from "../types";
 import { cn } from "../ui";
+
+function PromptCard(props: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const long = props.text.length > 240;
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1600);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  return (
+    <div className="rounded-xl border border-line bg-surface p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10.5px] uppercase tracking-wide text-faint">完整提示词</div>
+        <div className="flex items-center gap-2">
+          {long ? (
+            <button onClick={() => setExpanded((v) => !v)} className="text-[10.5px] text-dim hover:text-soft">
+              {expanded ? "收起" : "展开全文"}
+            </button>
+          ) : null}
+          <button
+            onClick={() => {
+              const text = props.text;
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => setCopied(true)).catch(() => setCopied(false));
+              }
+            }}
+            className="flex items-center gap-1 rounded-md border border-line2 px-1.5 py-0.5 text-[10.5px] text-dim transition hover:border-line-strong hover:text-soft"
+          >
+            {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+            {copied ? "已复制" : "复制"}
+          </button>
+        </div>
+      </div>
+      <p
+        className={cn(
+          "mt-1.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted",
+          long && !expanded ? "line-clamp-4" : ""
+        )}
+      >
+        {props.text}
+      </p>
+    </div>
+  );
+}
 
 export default function Results(props: { generation: Generation | null }) {
   const [lightbox, setLightbox] = useState<string | null>(null);
@@ -76,16 +123,14 @@ export default function Results(props: { generation: Generation | null }) {
               提示：401 多为 Key 问题，404 多为 Base URL 或模型名问题，429 为限流/额度。可点右上角「测试连接」确认。
             </p>
           </div>
-          <div className="mt-3 rounded-xl border border-line bg-surface p-3">
-            <div className="text-[10.5px] uppercase tracking-wide text-faint">prompt</div>
-            <p className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-muted">{gen.prompt}</p>
+          <div className="mt-3">
+            <PromptCard text={gen.prompt} />
           </div>
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="border-b border-line px-4 py-3">
-            <p className="line-clamp-2 text-[12.5px] leading-relaxed text-muted">{gen.prompt}</p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] text-faint">
+          <div className="space-y-2.5 border-b border-line px-4 py-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] text-faint">
               <span className="flex items-center gap-1">
                 <Cpu className="h-3 w-3" />
                 {gen.providerName}
@@ -95,6 +140,16 @@ export default function Results(props: { generation: Generation | null }) {
                 {formatMs(gen.latencyMs)}
               </span>
               <span>{gen.params.n} 张 · {gen.params.output_format.toUpperCase()}</span>
+              {gen.outputFormatActual && gen.outputFormatActual !== gen.params.output_format ? (
+                <span className="text-soft">实际 {gen.outputFormatActual.toUpperCase()}</span>
+              ) : null}
+              {gen.params.quality ? <span>画质 {gen.params.quality}</span> : null}
+              {gen.params.complexity && gen.params.complexity !== "auto" ? <span>复杂度 {gen.params.complexity}</span> : null}
+              {gen.params.frame_count ? (
+                <span>
+                  {gen.params.frame_count} 帧 · {gen.params.frame_duration_ms || 200}ms
+                </span>
+              ) : null}
               {gen.tokens && gen.tokens.totalTokens > 0 ? (
                 <span>
                   {formatTokens(gen.tokens.totalTokens)} tokens
@@ -103,6 +158,13 @@ export default function Results(props: { generation: Generation | null }) {
               ) : null}
               {gen.params.background && gen.params.background !== "auto" ? <span>背景 {gen.params.background}</span> : null}
             </div>
+            <PromptCard text={gen.prompt} />
+            {gen.formatNote ? (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-soft">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <span>{gen.formatNote}</span>
+              </div>
+            ) : null}
           </div>
 
           <div

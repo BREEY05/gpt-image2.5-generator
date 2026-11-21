@@ -11,6 +11,7 @@
 | 只是自己用新模型 | 界面「模型」输入框直接填新 model id | 不用 |
 | 新模型需要正确的尺寸/画质选项 | `server/models.mjs` | 源码版重启即可；安装版要重打包 |
 | 新模型有新参数（新 quality 档位、新开关） | `web/src/components/Composer.tsx` + `server/index.mjs` | 要重打包 |
+| 新增输出格式（例如 webp 换成 avif） | `server/models.mjs` + `server/index.mjs`（白名单/嗅探/扩展名）+ 前端格式下拉 | 要重打包 |
 | 接口路径/返回结构变了 | `server/openai.mjs` | 要重打包 |
 | 余额查询接口变了 | `server/quota.mjs` | 要重打包 |
 | 只改文案/主题/UI | `web/**` | 要重打包 |
@@ -61,9 +62,10 @@
 | quality | 画质下拉框的选项 |
 | customSize | 是否允许自定义宽高（false 时只显示 3 个预设尺寸） |
 | maxN | 一次最多生成几张 |
-| formats | 支持的输出格式 |
+| formats | 支持的输出格式（png / jpeg / webp / gif / svg） |
 | background | 是否支持 transparent |
 | edit | 是否支持编辑 |
+| complexity / gif / svg / markup | 新能力开关（见 `NEW_CAPS`），前端据此显示复杂度、GIF 帧参数、标记图层等控件 |
 
 匹配顺序（`capsFor`）：精确 id → 前缀 → `image-<family>` → 含 `gpt-image` → 通用兜底 `DEFAULT_CAPS`。没收录的模型也不会崩，只是参数按通用能力给。
 
@@ -77,6 +79,24 @@ node server/index.mjs      # 源码版重启即可，前端能力表来自 /api/
 打开界面 → 模型框输入新 id（或从下拉框选）→ 拉取模型列表确认 → 用真实 Key 出一张图。
 
 > 安装版用的是打包进去的 `server/models.mjs`，所以必须重新打包才会生效。
+
+### 1.4 新增一个请求参数 / 输出格式（以 0.3.0 的 GIF、SVG、complexity 为例）
+
+一次完整改动涉及 7 个位置，缺一个就会出现「界面能选但没发出去」或「文件扩展名不对」：
+
+1. `server/models.mjs`：预设里声明能力（`NEW_CAPS`）、`formats` 加入新格式、`defaultParams` 给默认值。
+2. `server/index.mjs`：
+   - `ALLOWED_FORMATS` 白名单加新格式；参数校验（例如 GIF 帧数 2-16）并给出中文 400。
+   - `fields` 组装时把新参数放进请求体（`complexity`、`frame_count`、`frame_duration_ms`）。
+   - 冲突规则：例如 GIF 不支持 mask、SVG 强制 n=1。
+   - `saveImages` 会按 `sniffFormat` 嗅探真实内容决定扩展名，不要直接信任请求的格式。
+3. `server/openai.mjs`：JSON 接口直接透传；multipart 接口里对象参数要 `JSON.stringify`，文件参数（markup）用 `form.append`。
+4. `web/src/types.ts`：Caps / Params / GeneratePayload / FALLBACK_CAPS 加字段。
+5. `web/src/components/Composer.tsx`：控件、默认值、切换格式时的参数收敛（清 mask、n=1 等）、submit 里组装 params。
+6. `scripts/mock-upstream.mjs`：按新格式返回夹具（GIF / SVG），加断言魔法词（EXPECTGIF 等）。
+7. `scripts/smoke.mjs`：断言请求体透传、落盘扩展名、content-type、魔数、冲突 400、历史记录完整性。
+
+最后 `pnpm build` + `pnpm smoke`，再按第 3 节打包发版。
 
 ---
 

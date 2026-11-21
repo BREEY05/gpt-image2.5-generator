@@ -104,14 +104,15 @@ function readJson(req) {
   });
 }
 
-// 极简 multipart 解析：只取文本字段、图片 part 数量、image[] 字段数量
+// 极简 multipart 解析：只取文本字段、图片 part 数量、image[] 字段数量、markup 字段数量
 function parseMultipart(buf, contentType) {
   const match = /boundary=("?)([^";]+)\1/.exec(String(contentType || ""));
-  if (!match) return { fields: {}, imageCount: 0, arrayCount: 0 };
+  if (!match) return { fields: {}, imageCount: 0, arrayCount: 0, markupCount: 0 };
   const marker = Buffer.from("--" + match[2]);
   const fields = {};
   let imageCount = 0;
   let arrayCount = 0;
+  let markupCount = 0;
   let pos = buf.indexOf(marker);
   while (pos !== -1) {
     let start = pos + marker.length;
@@ -129,12 +130,18 @@ function parseMultipart(buf, contentType) {
       const isFile = /filename=/.test(head);
       if (isFile && name.indexOf("image[]") === 0) arrayCount += 1;
       else if (isFile && name.indexOf("image") === 0) imageCount += 1;
+      else if (isFile && name === "markup") markupCount += 1;
       else if (name) fields[name] = body.toString("utf8");
     }
     pos = next;
   }
-  return { fields: fields, imageCount: imageCount, arrayCount: arrayCount };
+  return { fields: fields, imageCount: imageCount, arrayCount: arrayCount, markupCount: markupCount };
 }
+
+// 1x1 透明 GIF89a 夹具（897 字节以内的最小合法动图占位，扩展名/魔数够用）
+const GIF_FIXTURE = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+const SVG_FIXTURE =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="#7c3aed"/></svg>';
 
 function send(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -163,6 +170,8 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, {
       object: "list",
       data: [
+        { id: "gpt-image-2.6-flare", object: "model" },
+        { id: "gpt-image-2.6-sunburst", object: "model" },
         { id: "gpt-image-2.5-flare", object: "model" },
         { id: "gpt-image-2.5-sunburst", object: "model" },
         { id: "gpt-image-2", object: "model" },
@@ -179,11 +188,13 @@ const server = http.createServer(async (req, res) => {
     let body = {};
     let imageCount = 0;
     let arrayCount = 0;
+    let markupCount = 0;
     if (isMultipart) {
       const parsed = parseMultipart(await readRaw(req), req.headers["content-type"]);
       body = parsed.fields;
       imageCount = parsed.imageCount;
       arrayCount = parsed.arrayCount;
+      markupCount = parsed.markupCount;
     } else {
       body = await readJson(req);
     }
@@ -204,16 +215,40 @@ const server = http.createServer(async (req, res) => {
     if (prompt.indexOf("MOCKHTML200") !== -1) return sendHtml(res, 200, HTML_HOME);
     if (prompt.indexOf("MOCKHTMLCF") !== -1) return sendHtml(res, 403, HTML_CHALLENGE);
 
+    if (prompt.indexOf("EXPECTCOMPLEXITY") !== -1 && String(body.complexity || "") !== "low") {
+      return send(res, 400, { error: { message: "mock: expected complexity=low, got " + String(body.complexity) } });
+    }
+    if (
+      prompt.indexOf("EXPECTGIF") !== -1 &&
+      (String(body.output_format) !== "gif" || Number(body.frame_count) !== 4 || Number(body.frame_duration_ms) !== 350)
+    ) {
+      return send(res, 400, {
+        error: { message: "mock: expected gif frame_count=4 frame_duration_ms=350, got " + JSON.stringify({ output_format: body.output_format, frame_count: body.frame_count, frame_duration_ms: body.frame_duration_ms }) }
+      });
+    }
+    if (prompt.indexOf("EXPECTSVG") !== -1 && String(body.output_format) !== "svg") {
+      return send(res, 400, { error: { message: "mock: expected output_format=svg, got " + String(body.output_format) } });
+    }
+    if (isEdits && prompt.indexOf("EXPECTMARKUP") !== -1 && markupCount !== 1) {
+      return send(res, 400, { error: { message: "mock: expected 1 markup part, got " + markupCount } });
+    }
+
     const count = Math.max(1, Math.min(4, Number(body.n) || 1));
     const dims = sizeOf(body.size);
     const base = Math.floor(Math.random() * 100000);
+    const requestedFormat = String(body.output_format || "png");
+    // MOCKNOFMT 模拟「中转忽略请求格式，永远返回 PNG」
+    const effectiveFormat = prompt.indexOf("MOCKNOFMT") !== -1 ? "png" : requestedFormat;
     const delay = 700 + Math.random() * 900;
     await new Promise((r) => setTimeout(r, delay));
 
     const data = [];
     for (let i = 0; i < count; i += 1) {
-      const png = makePng(dims.w, dims.h, base + i * 7919);
-      data.push({ b64_json: png.toString("base64") });
+      let buf;
+      if (effectiveFormat === "gif") buf = GIF_FIXTURE;
+      else if (effectiveFormat === "svg") buf = Buffer.from(SVG_FIXTURE, "utf8");
+      else buf = makePng(dims.w, dims.h, base + i * 7919);
+      data.push({ b64_json: buf.toString("base64") });
     }
     return send(res, 200, {
       created: Math.floor(Date.now() / 1000),

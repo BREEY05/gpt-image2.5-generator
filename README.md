@@ -22,7 +22,7 @@
 
 ### 方式一：下载安装包（.exe，推荐）
 
-1. 到 GitHub Releases 页面下载 GPT-Image-Studio-<版本>-Setup.exe（当前 0.1.1）
+1. 到 GitHub Releases 页面下载 GPT-Image-Studio-<版本>-Setup.exe（当前 0.3.0）
 2. 双击安装：**每用户安装**，不需要管理员权限，可以自选安装目录
 3. 装完桌面会有「GPT Image Studio」图标，开始菜单里也有；双击即可启动，不需要 Node.js
 4. 首次启动会自动在 %APPDATA%\GPT Image Studio\data 建立全新的空数据库
@@ -93,14 +93,16 @@
 - 多 Provider 管理：官方、中转、自建网关并存，各自独立 Base URL / Key / 默认模型
 - Key 加密落盘（AES-256-GCM + 本机随机密钥），接口只返回 sk-...abcd 掩码
 - 两级连通性测试：/models 快测（不花钱） + 深度测试（真出一张小图，验证权限/额度/模型名）
-- 参数面板：模型、尺寸（预设 + 自定义 WxH）、画质 low/medium/high/xhigh/max/auto、数量 1-10、格式 png/jpeg/webp、背景、压缩质量、内容审核
-- 高级参数：任意 JSON 直接合并进请求体（input_fidelity、seed、中转私有参数都从这里透传）
-- 文生图 + 多参考图编辑（拖拽最多 16 张，可设首图）/ 遮罩
-- 历史记录：SQLite 存提示词与完整参数，图片落盘，大图预览、下载、删除
+- 内置模型预设：GPT-Image-2.6 sunburst / flare、2.5 sunburst / flare、2、1.5、1、1-mini，能力表与默认参数随模型自动切换
+- 参数面板：模型、尺寸（预设 + 自定义 WxH）、画质 low/medium/high/xhigh/max/auto、复杂度 low/medium/high、数量 1-10、格式 png/jpeg/webp/gif/svg、背景、压缩质量、内容审核；GIF 额外有帧数（2-16）与帧间隔
+- 高级参数：任意 JSON 直接合并进请求体（input_fidelity、seed、svg 对象、中转私有参数都从这里透传）
+- 文生图 + 多参考图编辑（拖拽最多 16 张，可设首图）/ 遮罩 / 标记图层（透明 PNG 叠在首图引导修改，与遮罩二选一）
+- 历史记录：SQLite 存完整提示词与完整参数，图片落盘；点一条历史即可看回当时输入的完整提示词（可复制）、参数和大图
 - 并发队列（默认 2，可调 1-8）、429/502/503/504 自动重试、错误码翻译成中文修复建议
 - 深色 / 浅色主题
 - 顶部额度条：上游余额（best-effort）+ 今日/本月用量 + 本次生成消耗，每次生成后自动刷新
 - token 统计与费用估算：记录输入/输出 token，按设置里的单价折算美元，历史记录同样适用
+- 实际格式兜底：中转忽略 gif / svg 而返回 PNG 时，按真实内容落盘，结果卡片标注「实际格式」并提示原因
 
 ---
 
@@ -125,7 +127,7 @@
 
 添加 Provider：Base URL 填 http://127.0.0.1:9911/v1，Key 随便填 sk-demo，模型填 gpt-image-2.5-flare。
 
-假服务内置错误开关：提示词里包含 MOCK401 / MOCK429 / MOCK500 会返回对应错误，用来验证错误提示。
+假服务内置错误开关：提示词里包含 MOCK401 / MOCK429 / MOCK500 会返回对应错误，用来验证错误提示；EXPECTGIF / EXPECTSVG / EXPECTCOMPLEXITY / EXPECTMARKUP 用来校验新参数确实发到了上游，MOCKNOFMT 模拟「中转忽略格式、永远返回 PNG」。
 
 ---
 
@@ -133,15 +135,21 @@
 
 | 界面项 | 请求体字段 | 说明 |
 |---|---|---|
-| 模型 | model | 以账号/中转实际支持为准，不硬编码 |
+| 模型 | model | 以账号/中转实际支持为准，不硬编码；内置 2.6 / 2.5 / 2 / 1.5 / 1-mini 能力表 |
 | 尺寸 | size | 自定义时两边需为 16 的倍数，宽高比 1:3~3:1，长边不超过 3840 |
-| 画质 | quality | gpt-image 系列 low/medium/high，2.5 另有 xhigh/max |
-| 数量 | n | 1-10 |
-| 格式 | output_format | png / jpeg / webp |
-| 背景 | background | transparent 仅对 png/webp 有效 |
+| 画质 | quality | gpt-image 系列 low/medium/high，2.5 / 2.6 另有 xhigh/max |
+| 复杂度 | complexity | low / medium / high，2.5 起支持；越高越慢越准，不额外计费 |
+| 数量 | n | 1-10；GIF / SVG 强制为 1 |
+| 格式 | output_format | png / jpeg / webp / gif / svg |
+| GIF 帧数 | frame_count | 2-16，默认 9，仅 gif |
+| GIF 帧间隔 | frame_duration_ms | 毫秒，默认 200，会四舍五入到 10ms，仅 gif |
+| 背景 | background | transparent 仅对 png/webp 有效；gif / svg 忽略 |
 | 压缩质量 | output_compression | 仅 jpeg/webp，0-100 |
 | 内容审核 | moderation | auto / low |
-| 高级参数 | 原样合并 | 覆盖同名字段 |
+| 标记图层 | markup | 编辑接口 multipart 的 markup 文件，透明 PNG，与 mask 互斥 |
+| 高级参数 | 原样合并 | 覆盖同名字段，例如 `{"svg":{"model":"gpt-image-2.6-sunburst"}}` |
+
+GIF / SVG 的官方限制：GIF 不支持 streaming / partial_images / mask / output_compression；SVG 要求 n=1，不支持压缩与 streaming。部分中转还没实现这两个格式或忽略帧参数，界面会以「实际格式」提示。
 
 请求 POST {BaseURL}/images/generations，编辑走 /images/edits（multipart）。gpt-image 系列只返回 b64_json；若中转返回 url，后端会自动下载落盘。
 
@@ -207,7 +215,7 @@
       models.mjs           模型能力表
     web/                   React 前端（Vite + TS + Tailwind v4）
       src/theme.ts         深色/浅色/跟随系统
-      src/components/      提供方、参数面板、结果、历史、设置
+      src/components/      提供方、参数面板（含 GIF / SVG / 复杂度 / 标记图层）、结果、历史、设置
     scripts/
       release.mjs          一条命令：构建 + 打包 + 验证
       launch.mjs           启动器：自检、构建、起服务、开浏览器
@@ -227,7 +235,7 @@
 
     pnpm smoke
 
-自动拉起 mock 与 app（8790 端口），覆盖健康检查、Provider CRUD、Key 掩码、连通性、模型过滤、生成、落盘、静态图片、历史、401 透传、空提示词拦截、设置持久化、明文 Key 检查、删除、路径穿越防护，共 31 项断言。
+自动拉起 mock 与 app（8790 端口），覆盖健康检查、Provider CRUD、Key 掩码、连通性、模型过滤、生成、落盘、静态图片、历史、401 透传、空提示词拦截、设置持久化、明文 Key 检查、删除、路径穿越防护，以及 2.6 预设、complexity、GIF / SVG 落盘与魔数、帧参数、标记图层、遮罩互斥、格式回退、完整提示词入库等，共 72 项断言。
 
 ### 重新打包 / 发版
 
@@ -247,6 +255,8 @@
 - 不处理 Azure 的 deployments 路径（需要时在 Base URL 里带完整前缀）
 - 单机单用户，没有登录体系
 - 出图是同步请求，一次生成多张高画质会比较久
+- GIF / SVG 支持取决于上游：截至 0.3.0 实测常见中转能出 GIF，但可能忽略帧数与帧间隔（按默认 9 帧 / 200ms）；SVG 在部分中转会回退成 PNG
+- 帧尺寸由上游决定，可能与请求的 size 不完全一致
 
 ## 十三、后续可加
 

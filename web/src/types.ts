@@ -25,6 +25,10 @@ export type Caps = {
   formats: string[];
   background: boolean;
   edit?: boolean;
+  complexity?: boolean;
+  gif?: boolean;
+  svg?: boolean;
+  markup?: boolean;
 };
 
 export type Params = {
@@ -36,6 +40,9 @@ export type Params = {
   background: string;
   output_compression: number;
   moderation: string;
+  complexity?: string;
+  frame_count?: number;
+  frame_duration_ms?: number;
   extra?: Record<string, unknown>;
 };
 
@@ -53,6 +60,8 @@ export type Generation = {
   error: string;
   errorHint?: string;
   latencyMs: number;
+  outputFormatActual?: string;
+  formatNote?: string;
   usage: unknown;
   tokens?: Tokens;
   costUsd?: number;
@@ -113,6 +122,7 @@ export type GeneratePayload = {
   params: Params;
   images?: string[];
   mask?: string;
+  markup?: string;
 };
 
 export const FALLBACK_CAPS: Caps = {
@@ -123,7 +133,11 @@ export const FALLBACK_CAPS: Caps = {
   maxN: 4,
   formats: ["png", "jpeg", "webp"],
   background: true,
-  edit: true
+  edit: true,
+  complexity: false,
+  gif: false,
+  svg: false,
+  markup: true
 };
 
 export function capsForModel(presets: Caps[], model: string): Caps {

@@ -34,6 +34,7 @@ export default function HistoryRail(props: {
               key={gen.id}
               role="button"
               tabIndex={0}
+              title={gen.prompt}
               onClick={() => props.onOpen(gen)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") props.onOpen(gen);
@@ -78,7 +79,7 @@ export default function HistoryRail(props: {
       </div>
 
       <div className="border-t border-line px-3 py-2 text-[10.5px] text-faint">
-        记录存在 data/app.db · 点击查看大图
+        记录存在 data/app.db · 点击查看完整提示词和大图
       </div>
     </aside>
   );

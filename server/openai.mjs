@@ -219,7 +219,7 @@ export async function generateImages(provider, apiKey, body, timeoutMs) {
   return collectImages(payload);
 }
 
-export async function editImages(provider, apiKey, fields, images, maskBuf, maskMime, timeoutMs) {
+export async function editImages(provider, apiKey, fields, images, maskBuf, maskMime, markupBuf, markupMime, timeoutMs) {
   const url = normalizeBaseUrl(provider.baseUrl) + "/images/edits";
   const list = Array.isArray(images) ? images : [];
   if (!list.length) throw new ApiError("编辑模式需要至少一张参考图");
@@ -227,7 +227,10 @@ export async function editImages(provider, apiKey, fields, images, maskBuf, mask
   const build = function (fieldName) {
     const form = new FormData();
     Object.keys(fields || {}).forEach(function (key) {
-      if (fields[key] != null && fields[key] !== "") form.append(key, String(fields[key]));
+      const value = fields[key];
+      if (value == null || value === "") return;
+      // 对象参数（例如 svg: { model }）官方 multipart 接口按 JSON 字符串传
+      form.append(key, typeof value === "object" ? JSON.stringify(value) : String(value));
     });
     list.forEach(function (item, index) {
       const buf = item && item.buf ? item.buf : item;
@@ -236,6 +239,8 @@ export async function editImages(provider, apiKey, fields, images, maskBuf, mask
       form.append(fieldName, new Blob([buf], { type: mime }), name);
     });
     if (maskBuf) form.append("mask", new Blob([maskBuf], { type: maskMime || "image/png" }), "mask.png");
+    // markup：透明 PNG 标记层，叠在首图上引导编辑（与 mask 互斥，由调用方校验）
+    if (markupBuf) form.append("markup", new Blob([markupBuf], { type: markupMime || "image/png" }), "markup.png");
     return form;
   };
 

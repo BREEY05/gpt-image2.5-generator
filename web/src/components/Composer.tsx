@@ -39,6 +39,21 @@ const QUALITY_LABELS: Record<string, string> = {
   auto: "自动"
 };
 
+const COMPLEXITY_LABELS: Record<string, string> = {
+  auto: "跟随模型默认",
+  low: "低 · 规划更少",
+  medium: "中",
+  high: "高 · 更慢更准"
+};
+
+const FORMAT_LABELS: Record<string, string> = {
+  png: "PNG",
+  jpeg: "JPEG",
+  webp: "WebP",
+  gif: "GIF 动图",
+  svg: "SVG 矢量"
+};
+
 const MAX_IMAGES = 16;
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -74,11 +89,16 @@ export default function Composer(props: {
   const [advancedError, setAdvancedError] = useState<string | null>(null);
   const [images, setImages] = useState<string[]>([]);
   const [mask, setMask] = useState<string | null>(null);
+  const [markup, setMarkup] = useState<string | null>(null);
+  const [complexity, setComplexity] = useState("auto");
+  const [frameCount, setFrameCount] = useState(9);
+  const [frameDuration, setFrameDuration] = useState(200);
   const [dragging, setDragging] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const imageInput = useRef<HTMLInputElement | null>(null);
   const maskInput = useRef<HTMLInputElement | null>(null);
+  const markupInput = useRef<HTMLInputElement | null>(null);
 
   const caps = useMemo(() => capsForModel(props.presets, model), [props.presets, model]);
 
@@ -103,7 +123,19 @@ export default function Composer(props: {
       const allowed = ["1024x1024", "1536x1024", "1024x1536"];
       if (allowed.indexOf(size) === -1) setSize("1024x1024");
     }
+    if (caps.formats.indexOf(format) === -1) setFormat("png");
   }, [caps]);
+
+  useEffect(() => {
+    // 格式切换时把不再适用的参数收回来：GIF 无遮罩、GIF/SVG 只能 1 张、SVG 无压缩
+    if (format === "gif" || format === "svg") {
+      setN(1);
+      if (mask) setMask(null);
+      setBackground("auto");
+    }
+    if (format === "gif" && markup) setMarkup(null);
+    if (!caps.complexity) setComplexity("auto");
+  }, [format, caps.complexity]);
 
   const fixedSizes = ["1024x1024", "1536x1024", "1024x1536"];
   const visibleSizes = caps.customSize ? props.sizePresets : fixedSizes;
@@ -177,16 +209,26 @@ export default function Composer(props: {
       setAdvancedError("编辑模式需要先添加参考图");
       return;
     }
+    if (mode === "edit" && mask && markup) {
+      setAdvancedError("遮罩与标记图层不能同时使用，二选一即可");
+      return;
+    }
+    if (format === "gif" && (frameCount < 2 || frameCount > 16)) {
+      setAdvancedError("GIF 帧数需在 2–16 之间");
+      return;
+    }
     setAdvancedError(null);
     const params: Params = {
       model: model.trim(),
       size,
       quality,
-      n,
+      n: format === "gif" || format === "svg" ? 1 : n,
       output_format: format,
-      background,
+      background: format === "gif" || format === "svg" ? "auto" : background,
       output_compression: compression,
       moderation,
+      complexity,
+      ...(format === "gif" ? { frame_count: frameCount, frame_duration_ms: frameDuration } : {}),
       ...(extra ? { extra } : {})
     };
     props.onGenerate({
@@ -194,11 +236,15 @@ export default function Composer(props: {
       mode,
       params,
       images: mode === "edit" && images.length ? images : undefined,
-      mask: mode === "edit" && mask ? mask : undefined
+      mask: mode === "edit" && mask && !markup ? mask : undefined,
+      markup: mode === "edit" && markup && !mask ? markup : undefined
     });
   }
 
   const options = Array.from(new Set([...(props.presets || []).map((p) => p.id), ...models, model].filter(Boolean)));
+  const oneShotFormat = format === "gif" || format === "svg";
+  const effectiveMaxN = oneShotFormat ? 1 : caps.maxN;
+  const effectiveN = oneShotFormat ? 1 : n;
   const canGenerate = !!props.provider && !!prompt.trim() && !props.busy && (mode !== "edit" || images.length > 0);
 
   return (
@@ -318,26 +364,61 @@ export default function Composer(props: {
                 拖入图片或点击添加，最多 {MAX_IMAGES} 张；第一张是主图。
               </p>
             </div>
-            <div className="mt-2 flex items-center gap-2 rounded-lg border border-line bg-app px-2 py-1.5">
-              <button
-                onClick={() => maskInput.current && maskInput.current.click()}
-                className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-dashed border-line2 bg-surface"
-              >
-                {mask ? (
-                  <img src={mask} alt="遮罩" className="h-full w-full object-cover" />
-                ) : (
-                  <ImagePlus className="h-3.5 w-3.5 text-dim" />
-                )}
-              </button>
-              <div className="min-w-0 flex-1 text-[10.5px] leading-tight text-faint">
-                {mask ? "遮罩已选择，只作用于首图" : "遮罩（可选）：透明区域＝要修改的地方，仅对首图生效"}
-              </div>
-              {mask ? (
-                <button onClick={() => setMask(null)} className="shrink-0 text-[10.5px] text-danger hover:underline">
-                  移除
+            {format !== "gif" ? (
+              <div className="mt-2 flex items-center gap-2 rounded-lg border border-line bg-app px-2 py-1.5">
+                <button
+                  onClick={() => maskInput.current && maskInput.current.click()}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-dashed border-line2 bg-surface"
+                >
+                  {mask ? (
+                    <img src={mask} alt="遮罩" className="h-full w-full object-cover" />
+                  ) : (
+                    <ImagePlus className="h-3.5 w-3.5 text-dim" />
+                  )}
                 </button>
-              ) : null}
-            </div>
+                <div className="min-w-0 flex-1 text-[10.5px] leading-tight text-faint">
+                  {mask ? "遮罩已选择，只作用于首图" : "遮罩（可选）：透明区域＝要修改的地方，仅对首图生效"}
+                </div>
+                {mask ? (
+                  <button onClick={() => setMask(null)} className="shrink-0 text-[10.5px] text-danger hover:underline">
+                    移除
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {format !== "gif" && caps.markup !== false ? (
+              <div className="mt-2 flex items-center gap-2 rounded-lg border border-line bg-app px-2 py-1.5">
+                <button
+                  onClick={() => {
+                    if (mask) return;
+                    if (markupInput.current) markupInput.current.click();
+                  }}
+                  disabled={!!mask}
+                  className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-dashed border-line2 bg-surface",
+                    mask ? "cursor-not-allowed opacity-40" : ""
+                  )}
+                >
+                  {markup ? (
+                    <img src={markup} alt="标记图层" className="h-full w-full object-cover" />
+                  ) : (
+                    <ImagePlus className="h-3.5 w-3.5 text-dim" />
+                  )}
+                </button>
+                <div className="min-w-0 flex-1 text-[10.5px] leading-tight text-faint">
+                  {markup
+                    ? "标记图层已选择：透明 PNG 叠在首图上引导修改"
+                    : mask
+                      ? "已选遮罩，标记图层不可用（二选一）"
+                      : "标记图层（可选）：透明 PNG，尺寸与首图一致"}
+                </div>
+                {markup ? (
+                  <button onClick={() => setMarkup(null)} className="shrink-0 text-[10.5px] text-danger hover:underline">
+                    移除
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <input
               ref={imageInput}
               type="file"
@@ -357,6 +438,17 @@ export default function Composer(props: {
               onChange={(e) => {
                 const file = e.target.files && e.target.files[0];
                 if (file) fileToDataUrl(file).then(setMask).catch(() => setAdvancedError("遮罩读取失败"));
+                e.target.value = "";
+              }}
+            />
+            <input
+              ref={markupInput}
+              type="file"
+              accept="image/png"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files && e.target.files[0];
+                if (file) fileToDataUrl(file).then(setMarkup).catch(() => setAdvancedError("标记图层读取失败"));
                 e.target.value = "";
               }}
             />
@@ -437,32 +529,47 @@ export default function Composer(props: {
               ))}
             </Select>
           </Field>
-          <Field label="数量" hint={"最多 " + caps.maxN}>
+          <Field label="数量" hint={oneShotFormat ? "该格式只能 1 张" : "最多 " + caps.maxN}>
             <Select value={String(n)} onChange={(e) => setN(Number(e.target.value))}>
-              {Array.from({ length: caps.maxN }, (_, i) => i + 1).map((v) => (
+              {Array.from({ length: effectiveMaxN }, (_, i) => i + 1).map((v) => (
                 <option key={v} value={v}>
                   {v} 张
                 </option>
               ))}
             </Select>
           </Field>
-          <Field label="格式">
+          <Field label="格式" hint={format === "gif" ? "动图，仅 1 张" : format === "svg" ? "矢量，仅 1 张" : undefined}>
             <Select value={format} onChange={(e) => setFormat(e.target.value)}>
               {caps.formats.map((f) => (
                 <option key={f} value={f}>
-                  {f.toUpperCase()}
+                  {FORMAT_LABELS[f] || f.toUpperCase()}
                 </option>
               ))}
             </Select>
           </Field>
+          {caps.complexity ? (
+            <Field label="复杂度" hint="规划算力，更慢更准">
+              <Select value={complexity} onChange={(e) => setComplexity(e.target.value)}>
+                {Object.keys(COMPLEXITY_LABELS).map((key) => (
+                  <option key={key} value={key}>
+                    {COMPLEXITY_LABELS[key]}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ) : null}
           <Field label="背景">
-            <Select value={background} onChange={(e) => setBackground(e.target.value)} disabled={!caps.background || format === "jpeg"}>
+            <Select
+              value={background}
+              onChange={(e) => setBackground(e.target.value)}
+              disabled={!caps.background || format === "jpeg" || oneShotFormat}
+            >
               <option value="auto">自动</option>
               <option value="opaque">不透明</option>
               <option value="transparent">透明（PNG/WebP）</option>
             </Select>
           </Field>
-          {format !== "png" ? (
+          {format === "jpeg" || format === "webp" ? (
             <Field label="压缩质量" hint="0-100">
               <TextInput
                 type="number"
@@ -481,6 +588,42 @@ export default function Composer(props: {
             </Select>
           </Field>
         </div>
+
+        {format === "gif" ? (
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2.5">
+              <Field label="GIF 帧数" hint="2–16">
+                <TextInput
+                  type="number"
+                  min={2}
+                  max={16}
+                  value={frameCount}
+                  onChange={(e) => setFrameCount(Math.max(2, Math.min(16, Number(e.target.value) || 9)))}
+                  className="h-9"
+                />
+              </Field>
+              <Field label="帧间隔" hint="毫秒，10 的倍数">
+                <TextInput
+                  type="number"
+                  min={10}
+                  step={10}
+                  value={frameDuration}
+                  onChange={(e) => setFrameDuration(Math.max(10, Math.min(655350, Number(e.target.value) || 200)))}
+                  className="h-9"
+                />
+              </Field>
+            </div>
+            <p className="rounded-lg border border-line bg-app px-2.5 py-2 text-[10.5px] leading-relaxed text-faint">
+              动图不支持遮罩与压缩质量；部分中转会忽略帧数与帧间隔，按默认 9 帧 / 200ms 输出。
+            </p>
+          </div>
+        ) : null}
+
+        {format === "svg" ? (
+          <p className="rounded-lg border border-line bg-app px-2.5 py-2 text-[10.5px] leading-relaxed text-faint">
+            SVG 只输出 1 张，不支持压缩与遮罩。部分中转尚未支持 SVG 时可能回退成 PNG，结果卡片会标注实际格式。
+          </p>
+        ) : null}
 
         <div className="rounded-xl border border-line bg-app">
           <button
@@ -520,7 +663,7 @@ export default function Composer(props: {
             <span className="text-faint">·</span>
             <span className="font-mono text-[10.5px] text-faint">{model || "未设模型"}</span>
           </span>
-          <span className="text-faint">{n} 张 · {size}</span>
+          <span className="text-faint">{effectiveN} 张 · {size} · {(FORMAT_LABELS[format] || format).toUpperCase()}</span>
         </div>
         <Button
           variant="primary"

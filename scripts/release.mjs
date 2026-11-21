@@ -88,10 +88,14 @@ function main() {
   }
 
   if (!skipDist) {
+    // --publish never: electron-builder treats an npm lifecycle event named
+    // "release" as implicit publishing and fails when GH_TOKEN is missing.
     step("打包 Windows 安装包 (electron-builder)", process.execPath, [
       path.join(root, "node_modules", "electron-builder", "cli.js"),
       "--win",
-      "nsis"
+      "nsis",
+      "--publish",
+      "never"
     ]);
     step("验证安装产物 (verify-release)", process.execPath, [path.join(root, "scripts", "verify-release.mjs")]);
   } else {

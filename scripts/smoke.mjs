@@ -51,6 +51,12 @@ async function req(pathname, init) {
   return { status: res.status, json: json, text: text, headers: res.headers };
 }
 
+async function fetchFile(url) {
+  const res = await fetch(APP + url);
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { status: res.status, type: res.headers.get("content-type"), buf: buf };
+}
+
 async function waitFor(check, tries, gap) {
   for (let i = 0; i < tries; i += 1) {
     try {
@@ -244,6 +250,114 @@ async function main() {
   assert(r.status === 200 && r.json.settings.concurrency === 3, "保存设置", r.json);
   r = await req("/api/settings");
   assert(r.json.settings.defaultProviderId === providerId, "设置持久化", r.json);
+
+  // ---- 2.6 / 新格式 / 新参数 ----
+  r = await req("/api/state");
+  const presets = (r.json && r.json.presets) || [];
+  const pSun = presets.find((p) => p.id === "gpt-image-2.6-sunburst");
+  const pFla = presets.find((p) => p.id === "gpt-image-2.6-flare");
+  assert(!!pSun && !!pFla, "预设包含 2.6 sunburst / flare", presets.map((p) => p.id));
+  assert(!!pSun && pSun.formats.indexOf("gif") !== -1 && pSun.formats.indexOf("svg") !== -1, "2.6 预设支持 GIF / SVG", pSun && pSun.formats);
+  assert(!!pSun && pSun.complexity === true && pSun.gif === true && pSun.svg === true && pSun.markup === true, "2.6 预设声明新能力", pSun);
+
+  const p26 = { model: "gpt-image-2.6-sunburst", size: "1024x1024", quality: "low", n: 1, output_format: "png", background: "auto", moderation: "auto" };
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "EXPECTCOMPLEXITY complexity passthrough", mode: "generate", params: Object.assign({}, p26, { complexity: "low" }) })
+  });
+  assert(r.status === 200 && r.json.generation && r.json.generation.params.complexity === "low", "complexity 透传到上游", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({
+      providerId: providerId,
+      prompt: "EXPECTGIF animation frames",
+      mode: "generate",
+      params: Object.assign({}, p26, { n: 3, output_format: "gif", background: "transparent", frame_count: 4, frame_duration_ms: 350 })
+    })
+  });
+  const gifGen = (r.json && r.json.generation) || null;
+  assert(r.status === 200 && !!gifGen && gifGen.files.length === 1, "GIF 生成（强制 1 张）", r.json && r.json.error);
+  assert(
+    !!gifGen && gifGen.params.n === 1 && (gifGen.params.background === undefined || gifGen.params.background === "auto"),
+    "GIF 时 n/background 被收敛",
+    gifGen && gifGen.params
+  );
+  assert(!!gifGen && /\.gif$/.test(gifGen.files[0]), "GIF 落盘扩展名为 .gif", gifGen && gifGen.files);
+  const gifFile = gifGen ? await fetchFile(gifGen.files[0]) : { status: 0, type: "", buf: Buffer.alloc(0) };
+  assert(gifFile.status === 200 && String(gifFile.type).indexOf("image/gif") !== -1, "GIF content-type 正确", gifFile.type);
+  assert(gifFile.buf.slice(0, 6).toString("ascii") === "GIF89a", "GIF 魔数正确", gifFile.buf.slice(0, 6).toString("ascii"));
+  assert(!!gifGen && gifGen.params.frame_count === 4 && gifGen.params.frame_duration_ms === 350, "GIF 帧参数写入记录", gifGen && gifGen.params);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "EXPECTSVG vector output", mode: "generate", params: Object.assign({}, p26, { output_format: "svg" }) })
+  });
+  const svgGen = (r.json && r.json.generation) || null;
+  assert(r.status === 200 && !!svgGen && /\.svg$/.test(svgGen.files[0]), "SVG 落盘扩展名为 .svg", r.json && r.json.error);
+  const svgFile = svgGen ? await fetchFile(svgGen.files[0]) : { status: 0, type: "", buf: Buffer.alloc(0) };
+  assert(svgFile.status === 200 && String(svgFile.type).indexOf("svg") !== -1, "SVG content-type 正确", svgFile.type);
+  assert(svgFile.buf.slice(0, 500).toString("utf8").indexOf("<svg") !== -1, "SVG 内容是矢量文本", svgFile.buf.slice(0, 80).toString("utf8"));
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "bad frames", mode: "generate", params: Object.assign({}, p26, { output_format: "gif", frame_count: 1 }) })
+  });
+  assert(r.status === 400 && r.json.error.message.indexOf("帧数") !== -1, "GIF 帧数越界被拦截", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "bad duration", mode: "generate", params: Object.assign({}, p26, { output_format: "gif", frame_duration_ms: 0 }) })
+  });
+  assert(r.status === 400 && r.json.error.message.indexOf("帧间隔") !== -1, "GIF 帧间隔非法被拦截", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({
+      providerId: providerId,
+      prompt: "gif with mask",
+      mode: "edit",
+      images: [tiny],
+      mask: tiny,
+      params: Object.assign({}, p26, { output_format: "gif" })
+    })
+  });
+  assert(r.status === 400 && r.json.error.message.indexOf("GIF") !== -1, "GIF 编辑带遮罩被拦截", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "EXPECTMARKUP guide layer", mode: "edit", images: [tiny], markup: tiny, params: p26 })
+  });
+  assert(r.status === 200 && r.json.generation && r.json.generation.mode === "edit", "markup 标记图层编辑", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "mask and markup", mode: "edit", images: [tiny], mask: tiny, markup: tiny, params: p26 })
+  });
+  assert(r.status === 400 && r.json.error.message.indexOf("不能同时") !== -1, "遮罩与标记图层互斥", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "markup jpeg", mode: "edit", images: [tiny], markup: "data:image/jpeg;base64," + TINY_PNG, params: p26 })
+  });
+  assert(r.status === 400 && r.json.error.message.indexOf("PNG") !== -1, "标记图层必须 PNG", r.json && r.json.error);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "MOCKNOFMT ignore requested gif", mode: "generate", params: Object.assign({}, p26, { output_format: "gif" }) })
+  });
+  const nofmtGen = (r.json && r.json.generation) || null;
+  assert(r.status === 200 && !!nofmtGen && /\.png$/.test(nofmtGen.files[0]), "中转忽略格式时按真实 PNG 落盘", r.json && r.json.error);
+  assert(!!nofmtGen && nofmtGen.outputFormatActual === "png", "记录真实输出格式", nofmtGen && nofmtGen.outputFormatActual);
+  assert(!!nofmtGen && typeof nofmtGen.formatNote === "string" && nofmtGen.formatNote.length > 0, "格式不符时给出提示", nofmtGen && nofmtGen.formatNote);
+
+  const longPrompt = "很长的提示词：" + "雪山、湖泊与极光的电影感画面，".repeat(20);
+  r = await req("/api/generate", { method: "POST", body: JSON.stringify({ providerId: providerId, prompt: longPrompt, mode: "generate", params: p26 }) });
+  const longId = r.json && r.json.generation && r.json.generation.id;
+  r = await req("/api/generations?limit=100");
+  const longRow = ((r.json && r.json.generations) || []).find((g) => g.id === longId);
+  assert(!!longRow && longRow.prompt === longPrompt, "历史记录保存完整提示词（不截断）", longRow && longRow.prompt && longRow.prompt.length);
 
   const rawDb = fs.readFileSync(path.join(dataDir, "app.db"));
   assert(rawDb.indexOf("sk-mock-secret-1234") === -1, "数据库中没有明文 Key");
