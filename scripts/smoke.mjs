@@ -191,6 +191,49 @@ async function main() {
   assert(r.status === 401 && r.json.error && r.json.error.message.indexOf("Incorrect API key") !== -1, "上游 401 透传为可读错误", r.json && r.json.error);
   assert(r.json.error.hint && r.json.error.hint.length > 0, "401 附带修复提示", r.json && r.json.error && r.json.error.hint);
 
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "MOCKHTML502 gateway page", mode: "generate", params: { model: "gpt-image-2.5-flare", size: "1024x1024", quality: "low", n: 1, output_format: "png", background: "auto", output_compression: 90, moderation: "auto" } })
+  });
+  assert(r.status === 502, "HTML 网关页判为 502", r.status);
+  const htmlErr = (r.json && r.json.error) || {};
+  assert(!!htmlErr.message && htmlErr.message.indexOf("网页") !== -1, "HTML 错误翻译成人话（不是整页标签）", htmlErr.message);
+  assert(!!htmlErr.message && htmlErr.message.indexOf("502 Bad Gateway") !== -1, "HTML 错误带出页面标题", htmlErr.message);
+  assert(!!htmlErr.message && htmlErr.message.indexOf("<!DOCTYPE") === -1 && htmlErr.message.length < 400, "HTML 错误不把原始标签糊到界面", (htmlErr.message || "").length);
+  assert(!!htmlErr.hint && htmlErr.hint.indexOf("网关错误") !== -1, "网关 502 页提示「中转站自己挂了」", htmlErr.hint);
+  assert(!!htmlErr.hint && htmlErr.hint.indexOf("http://127.0.0.1:9911/v1/images/generations") !== -1, "提示里带出实际请求地址", htmlErr.hint);
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "MOCKHTMLCF challenge", mode: "generate", params: { model: "gpt-image-2.5-flare", size: "1024x1024", quality: "low", n: 1, output_format: "png", background: "auto", output_compression: 90, moderation: "auto" } })
+  });
+  const cfErr = (r.json && r.json.error) || {};
+  assert(r.status === 403 && !!cfErr.hint && cfErr.hint.indexOf("人机验证") !== -1, "Cloudflare 人机验证给出专属提示", cfErr.hint);
+  assert(r.json.generation && r.json.generation.errorHint === cfErr.hint, "错误提示持久化到记录", r.json && r.json.generation && r.json.generation.errorHint);
+
+
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: providerId, prompt: "MOCKHTML200 homepage", mode: "generate", params: { model: "gpt-image-2.5-flare", size: "1024x1024", quality: "low", n: 1, output_format: "png", background: "auto", output_compression: 90, moderation: "auto" } })
+  });
+  const homeErr = (r.json && r.json.error) || {};
+  assert(r.status === 502 && !!homeErr.message && homeErr.message.indexOf("某中转站") !== -1, "200 但返回网页时识别为「不是 JSON」", homeErr.message);
+
+  // Base URL 误粘成完整接口地址时，应自动剥掉后缀而不是拼出 /v1/images/generations/v1
+  r = await req("/api/providers", {
+    method: "POST",
+    body: JSON.stringify({ name: "粘了完整接口地址", baseUrl: "http://127.0.0.1:9911/v1/images/generations/", authStyle: "bearer", apiKey: "sk-mock-other-9999", model: "gpt-image-2.5-flare" })
+  });
+  const gluedId = r.json.provider.id;
+  r = await req("/api/providers/" + gluedId + "/test", { method: "POST", body: JSON.stringify({ deep: false }) });
+  assert(r.status === 200 && r.json.ok === true, "完整接口地址粘贴到 Base URL 也能连通", r.json);
+  r = await req("/api/generate", {
+    method: "POST",
+    body: JSON.stringify({ providerId: gluedId, prompt: "base url with endpoint suffix", mode: "generate", params: { model: "gpt-image-2.5-flare", size: "1024x1024", quality: "low", n: 1, output_format: "png", background: "auto", output_compression: 90, moderation: "auto" } })
+  });
+  assert(r.status === 200 && r.json.generation && r.json.generation.files.length === 1, "完整接口地址粘贴到 Base URL 也能出图", r.json && r.json.error);
+  await req("/api/providers/" + gluedId, { method: "DELETE" });
+
   r = await req("/api/generate", { method: "POST", body: JSON.stringify({ providerId: providerId, prompt: "   ", params: {} }) });
   assert(r.status === 400, "空提示词被拦截", r.json);
 

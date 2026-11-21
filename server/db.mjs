@@ -69,7 +69,8 @@ function migrate() {
     ["output_tokens", "INTEGER DEFAULT 0"],
     ["total_tokens", "INTEGER DEFAULT 0"],
     ["cost_usd", "REAL DEFAULT 0"],
-    ["image_count", "INTEGER DEFAULT 0"]
+    ["image_count", "INTEGER DEFAULT 0"],
+    ["error_hint", "TEXT DEFAULT ''"]
   ];
   for (const item of additions) {
     if (!columns.has(item[0])) db.exec("ALTER TABLE generations ADD COLUMN " + item[0] + " " + item[1]);
@@ -166,7 +167,7 @@ export function closeDb() {
 
 export function insertGeneration(record) {
   const tokens = record.tokens || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-  db.prepare("INSERT INTO generations (id, provider_id, provider_name, mode, prompt, params, files, status, error, latency_ms, usage, created_at, input_tokens, output_tokens, total_tokens, cost_usd, image_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+  db.prepare("INSERT INTO generations (id, provider_id, provider_name, mode, prompt, params, files, status, error, error_hint, latency_ms, usage, created_at, input_tokens, output_tokens, total_tokens, cost_usd, image_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run(
       record.id,
       record.providerId,
@@ -177,6 +178,7 @@ export function insertGeneration(record) {
       JSON.stringify(record.files || []),
       record.status,
       record.error || "",
+      record.errorHint || "",
       record.latencyMs || 0,
       JSON.stringify(record.usage || null),
       record.createdAt,
@@ -207,6 +209,7 @@ function rowToGeneration(row) {
     files: files,
     status: row.status,
     error: row.error,
+    errorHint: row.error_hint || "",
     latencyMs: row.latency_ms,
     usage: usage,
     tokens: {

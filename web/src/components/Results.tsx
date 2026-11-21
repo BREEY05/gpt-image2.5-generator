@@ -57,6 +57,15 @@ export default function Results(props: { generation: Generation | null }) {
               生成失败
             </div>
             <p className="mt-2 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-danger">{gen.error}</p>
+            {gen.errorHint ? (
+              <div className="mt-3 rounded-lg border border-line2 bg-elevated px-3 py-2">
+                <div className="text-[10.5px] uppercase tracking-wide text-faint">怎么处理</div>
+                <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-soft">{gen.errorHint}</p>
+                {(gen.errorHint || "").indexOf("实际请求地址：") !== -1 ? (
+                  <p className="mt-1 text-[11px] leading-relaxed text-faint">把「实际请求地址」和在你中转后台看到的接口文档对比一下，多半差在路径或域名上。</p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-dim">
               <span>{gen.providerName}</span>
               <span className="font-mono">{gen.params.model}</span>

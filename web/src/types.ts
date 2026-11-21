@@ -51,6 +51,7 @@ export type Generation = {
   files: string[];
   status: "ok" | "error";
   error: string;
+  errorHint?: string;
   latencyMs: number;
   usage: unknown;
   tokens?: Tokens;

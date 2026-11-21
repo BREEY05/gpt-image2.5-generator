@@ -142,6 +142,16 @@ function send(res, status, payload) {
   res.end(body);
 }
 
+// 模拟「上游返回 HTML 网页」：Cloudflare 网关报错页 / 网站首页
+const HTML_GATEWAY = '<!DOCTYPE html>\n<!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->\n<html class="no-js" lang="en-US">\n<head>\n<title>502 Bad Gateway</title>\n<meta charset="utf-8">\n</head>\n<body>\n<h1>502 Bad Gateway</h1>\n<p>cloudflare</p>\n<p>Ray ID: 8f1c2d3e4f5a6b7c</p>\n</body>\n</html>';
+const HTML_HOME = '<!DOCTYPE html>\n<html lang="zh-CN">\n<head><title>某中转站 - 首页</title></head>\n<body><h1>欢迎访问 API 中转站</h1><p>请登录后使用</p></body>\n</html>';
+const HTML_CHALLENGE = '<!DOCTYPE html>\n<html lang="en-US">\n<head><title>Just a moment...</title></head>\n<body><h1>Enable JavaScript and cookies to continue</h1><p>Cloudflare</p></body>\n</html>';
+
+function sendHtml(res, status, html) {
+  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
+  res.end(html);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", "http://localhost");
 
@@ -190,6 +200,9 @@ const server = http.createServer(async (req, res) => {
     if (prompt.indexOf("MOCK401") !== -1) return send(res, 401, { error: { message: "Incorrect API key provided: sk-mock", type: "invalid_request_error" } });
     if (prompt.indexOf("MOCK429") !== -1) return send(res, 429, { error: { message: "Rate limit reached for images per min", type: "rate_limit_error" } });
     if (prompt.indexOf("MOCK500") !== -1) return send(res, 500, { error: { message: "The server had an error while processing your request", type: "server_error" } });
+    if (prompt.indexOf("MOCKHTML502") !== -1) return sendHtml(res, 502, HTML_GATEWAY);
+    if (prompt.indexOf("MOCKHTML200") !== -1) return sendHtml(res, 200, HTML_HOME);
+    if (prompt.indexOf("MOCKHTMLCF") !== -1) return sendHtml(res, 403, HTML_CHALLENGE);
 
     const count = Math.max(1, Math.min(4, Number(body.n) || 1));
     const dims = sizeOf(body.size);
@@ -208,6 +221,8 @@ const server = http.createServer(async (req, res) => {
       usage: { input_tokens: 24, output_tokens: 1024 * count, total_tokens: 1024 * count + 24 }
     });
   }
+
+  if (req.method === "GET" && url.pathname === "/website") return sendHtml(res, 200, HTML_HOME);
 
   return send(res, 404, { error: { message: "mock: not found " + req.method + " " + url.pathname } });
 });

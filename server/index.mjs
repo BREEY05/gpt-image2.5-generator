@@ -292,6 +292,7 @@ async function handleGenerate(req, res) {
       files: [],
       status: "error",
       error: err.message,
+      errorHint: err.hint || "",
       latencyMs: Date.now() - started,
       usage: null,
       tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },

@@ -12,13 +12,81 @@ export class ApiError extends Error {
   }
 }
 
+// 用户经常会把完整接口地址粘进 Base URL，这里把已知的接口后缀去掉，避免拼出 /v1/images/generations/v1。
+const ENDPOINT_SUFFIXES = [
+  "/images/generations",
+  "/images/edits",
+  "/images/variations",
+  "/chat/completions",
+  "/responses",
+  "/completions",
+  "/embeddings"
+];
+
 export function normalizeBaseUrl(input) {
   let s = String(input || "").trim();
   if (!s) return "";
   while (s.endsWith("/")) s = s.slice(0, -1);
+  const lower = s.toLowerCase();
+  for (const suffix of ENDPOINT_SUFFIXES) {
+    if (lower.endsWith(suffix)) {
+      s = s.slice(0, s.length - suffix.length);
+      while (s.endsWith("/")) s = s.slice(0, -1);
+      break;
+    }
+  }
   if (s.endsWith("/v1")) return s;
   if (s.indexOf("/v1/") !== -1) return s;
   return s + "/v1";
+}
+
+function looksLikeHtml(text) {
+  const head = String(text || "").trim().slice(0, 300).toLowerCase();
+  if (!head) return false;
+  return head.indexOf("<!doctype") === 0 || head.indexOf("<html") === 0 || head.indexOf("<head") === 0 || head.indexOf("<?xml") === 0;
+}
+
+function decodeEntities(s) {
+  return String(s || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+// 把上游返回的 HTML 页面压成一句人话：标题 + 正文前若干字，而不是把整页标签糊到界面上。
+function summarizeHtmlPage(text) {
+  const raw = String(text || "");
+  const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(raw);
+  const title = decodeEntities((titleMatch ? titleMatch[1] : "").replace(/\s+/g, " ").trim()).slice(0, 120);
+  const plain = decodeEntities(
+    raw
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  ).slice(0, 160);
+  const cloudflare = /cloudflare|cf-error|cf-chl|attention required|just a moment|enable javascript and cookies/i.test(raw);
+  return { title: title, plain: plain, cloudflare: cloudflare };
+}
+
+function htmlErrorHint(info, url, status) {
+  const parts = [];
+  const hay = (info.title + " " + info.plain).toLowerCase();
+  if (/just a moment|attention required|cf-chl|enable javascript and cookies/.test(hay)) {
+    parts.push("站点的人机验证拦下了这次请求：换一个网络 / 代理再试，或让中转方把你的出口 IP 放行");
+  } else if (/bad gateway|gateway time|service unavailable|502|503|504/.test(hay) || (status >= 500)) {
+    parts.push("这是中转站自己的网关错误，不是你的 Key 或参数问题：通常是它的后端挂了 / 超时，换一个中转或等它恢复");
+  } else if (status === 404) {
+    parts.push("地址 404 且返回网页：Base URL 很可能指到了网站首页，应填到 API，例如 https://域名/v1");
+  } else {
+    parts.push("上游返回的是网页而不是接口 JSON：常见于 Base URL 指到了网站首页、或中转网关直接报错");
+  }
+  if (url) parts.push("实际请求地址：" + url);
+  return parts.join("；");
 }
 
 export function authHeaders(provider, apiKey) {
@@ -39,14 +107,22 @@ export function hintFor(status) {
   return "";
 }
 
-function toApiError(res, text, payload) {
+function toApiError(res, text, payload, url) {
   let message = "";
   if (payload && payload.error) {
     message = typeof payload.error === "string" ? payload.error : payload.error.message || "";
   }
+  let hint = hintFor(res.status);
+  if (!message && looksLikeHtml(text)) {
+    const info = summarizeHtmlPage(text);
+    message = "上游返回的是一个网页，不是接口数据（HTTP " + res.status + "）";
+    if (info.title) message += " · 页面标题：" + info.title;
+    else if (info.plain) message += " · " + info.plain.slice(0, 80);
+    hint = [hint, htmlErrorHint(info, url, res.status)].filter(Boolean).join("；");
+  }
   if (!message) message = String(text || "").slice(0, 300) || res.statusText || "请求失败";
   const retryable = res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
-  return new ApiError(message, { status: res.status, hint: hintFor(res.status), retryable: retryable, payload: payload });
+  return new ApiError(message, { status: res.status, hint: hint, retryable: retryable, payload: payload });
 }
 
 export async function request(url, init, timeoutMs) {
@@ -76,7 +152,7 @@ export async function probeModels(provider, apiKey) {
   const text = await res.text();
   let payload = null;
   try { payload = JSON.parse(text); } catch (e) {}
-  if (!res.ok) throw toApiError(res, text, payload);
+  if (!res.ok) throw toApiError(res, text, payload, url);
   const data = payload && Array.isArray(payload.data) ? payload.data : [];
   return data
     .map(function (item) {
@@ -138,12 +214,8 @@ export async function generateImages(provider, apiKey, body, timeoutMs) {
   const text = await res.text();
   let payload = null;
   try { payload = JSON.parse(text); } catch (e) {}
-  if (!res.ok) throw toApiError(res, text, payload);
-  if (!payload) {
-    throw new ApiError("接口返回的不是 JSON（可能是 HTML 页面）", {
-      hint: "Base URL 可能指向了网站首页而不是 API 地址，通常应以 /v1 结尾"
-    });
-  }
+  if (!res.ok) throw toApiError(res, text, payload, url);
+  if (!payload) throw notJsonError(text, url);
   return collectImages(payload);
 }
 
@@ -185,9 +257,22 @@ export async function editImages(provider, apiKey, fields, images, maskBuf, mask
     const msg = String((out.payload && out.payload.error && out.payload.error.message) || out.text || "");
     if (/image/i.test(msg)) out = await send("image");
   }
-  if (!out.res.ok) throw toApiError(out.res, out.text, out.payload);
-  if (!out.payload) throw new ApiError("接口返回的不是 JSON（可能是 HTML 页面）", { hint: "检查 Base URL 是否指向 API" });
+  if (!out.res.ok) throw toApiError(out.res, out.text, out.payload, url);
+  if (!out.payload) throw notJsonError(out.text, url);
   return collectImages(out.payload);
+}
+
+// 状态码是 2xx 但返回的不是 JSON（多为网站首页 / 维护页 / 网关页）
+function notJsonError(text, url) {
+  if (looksLikeHtml(text)) {
+    const info = summarizeHtmlPage(text);
+    let message = "接口返回的是一个网页，不是 JSON";
+    if (info.title) message += " · 页面标题：" + info.title;
+    return new ApiError(message, { status: 0, hint: htmlErrorHint(info, url, 200) });
+  }
+  return new ApiError("接口返回的不是 JSON（可能是 HTML 页面）", {
+    hint: "Base URL 可能指向了网站首页而不是 API 地址，通常应以 /v1 结尾" + (url ? "；实际请求地址：" + url : "")
+  });
 }
 
 async function collectImages(payload) {
@@ -198,7 +283,16 @@ async function collectImages(payload) {
       images.push({ buf: Buffer.from(String(item.b64_json), "base64"), ext: "" });
     } else if (item && item.url) {
       const res = await request(item.url, { method: "GET" }, 120000);
-      if (!res.ok) throw new ApiError("图片下载失败（HTTP " + res.status + "）", { hint: "中转返回的图片 URL 不可访问或已过期" });
+      if (!res.ok) {
+        const text = await res.text().catch(function () { return ""; });
+        if (looksLikeHtml(text)) {
+          const info = summarizeHtmlPage(text);
+          throw new ApiError("图片下载失败：地址返回的是网页（HTTP " + res.status + "）" + (info.title ? " · " + info.title : ""), {
+            hint: "中转返回的图片 URL 可能已过期或被防盗链拦截" + (url ? "；实际地址：" + url : "")
+          });
+        }
+        throw new ApiError("图片下载失败（HTTP " + res.status + "）", { hint: "中转返回的图片 URL 不可访问或已过期" });
+      }
       const ab = await res.arrayBuffer();
       images.push({ buf: Buffer.from(ab), ext: "" });
     }
