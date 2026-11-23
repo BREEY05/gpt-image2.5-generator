@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,7 +8,26 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = path.join(root, ".tmp", "smoke-data");
 fs.rmSync(dataDir, { recursive: true, force: true });
 
-const APP = "http://127.0.0.1:8790";
+let APP = "http://127.0.0.1:8790";
+let MOCK = "http://127.0.0.1:9911";
+
+// Windows 可能把一段端口保留给 Hyper-V/WinNAT，此时 bind 会 EACCES，
+// 所以测试也不能写死端口，从基准端口往后找第一个能监听的。
+function canBind(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.once("error", () => resolve(false));
+    srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
+  });
+}
+
+async function pickPort(start, count) {
+  for (let p = start; p < start + (count || 400); p += 1) {
+    if (await canBind(p)) return p;
+  }
+  return 0;
+}
 const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const failures = [];
 const children = [];
@@ -68,8 +88,16 @@ async function waitFor(check, tries, gap) {
 }
 
 async function main() {
-  start("mock", [path.join(root, "scripts", "mock-upstream.mjs")], { MOCK_PORT: "9911" });
-  start("app", [path.join(root, "server", "index.mjs")], { PORT: "8790", DATA_DIR: dataDir });
+  const mockPort = await pickPort(9911);
+  const appPort = await pickPort(8790);
+  if (!mockPort || !appPort) {
+    console.log("FAIL  找不到可用端口（mock/app）");
+    process.exit(1);
+  }
+  APP = "http://127.0.0.1:" + appPort;
+  MOCK = "http://127.0.0.1:" + mockPort;
+  start("mock", [path.join(root, "scripts", "mock-upstream.mjs")], { MOCK_PORT: String(mockPort) });
+  start("app", [path.join(root, "server", "index.mjs")], { PORT: String(appPort), DATA_DIR: dataDir });
 
   const up = await waitFor(async () => (await req("/api/health")).status === 200, 40, 250);
   assert(up, "服务启动 /api/health");
@@ -83,7 +111,7 @@ async function main() {
     method: "POST",
     body: JSON.stringify({
       name: "Mock 上游",
-      baseUrl: "http://127.0.0.1:9911/v1",
+      baseUrl: MOCK + "/v1",
       authStyle: "bearer",
       apiKey: "sk-mock-secret-1234",
       model: "gpt-image-2.5-flare"
@@ -207,7 +235,7 @@ async function main() {
   assert(!!htmlErr.message && htmlErr.message.indexOf("502 Bad Gateway") !== -1, "HTML 错误带出页面标题", htmlErr.message);
   assert(!!htmlErr.message && htmlErr.message.indexOf("<!DOCTYPE") === -1 && htmlErr.message.length < 400, "HTML 错误不把原始标签糊到界面", (htmlErr.message || "").length);
   assert(!!htmlErr.hint && htmlErr.hint.indexOf("网关错误") !== -1, "网关 502 页提示「中转站自己挂了」", htmlErr.hint);
-  assert(!!htmlErr.hint && htmlErr.hint.indexOf("http://127.0.0.1:9911/v1/images/generations") !== -1, "提示里带出实际请求地址", htmlErr.hint);
+  assert(!!htmlErr.hint && htmlErr.hint.indexOf(MOCK + "/v1/images/generations") !== -1, "提示里带出实际请求地址", htmlErr.hint);
 
   r = await req("/api/generate", {
     method: "POST",
@@ -228,7 +256,7 @@ async function main() {
   // Base URL 误粘成完整接口地址时，应自动剥掉后缀而不是拼出 /v1/images/generations/v1
   r = await req("/api/providers", {
     method: "POST",
-    body: JSON.stringify({ name: "粘了完整接口地址", baseUrl: "http://127.0.0.1:9911/v1/images/generations/", authStyle: "bearer", apiKey: "sk-mock-other-9999", model: "gpt-image-2.5-flare" })
+    body: JSON.stringify({ name: "粘了完整接口地址", baseUrl: MOCK + "/v1/images/generations/", authStyle: "bearer", apiKey: "sk-mock-other-9999", model: "gpt-image-2.5-flare" })
   });
   const gluedId = r.json.provider.id;
   r = await req("/api/providers/" + gluedId + "/test", { method: "POST", body: JSON.stringify({ deep: false }) });

@@ -207,6 +207,8 @@ git push origin main --tags
 | electron-builder 卡住/超时 | 确认设置了两个 MIRROR 环境变量（脚本已默认） |
 | EBUSY: 文件被占用 | 结束 GPT Image Studio 进程，或删掉 release/ 再打 |
 | pnpm 脚本报 ERR_PNPM_IGNORED_BUILDS | 检查 pnpm-workspace.yaml 的 allowBuilds 配置 |
+| 启动报 `EACCES: permission denied 127.0.0.1:8787` | Windows 把这段端口保留给了 Hyper-V/WinNAT（`netsh interface ipv4 show excludedportrange protocol=tcp` 可查）。start.bat 会自动顺延端口；手动启动用 `$env:PORT=9050; node server/index.mjs`。也可以管理员执行 `net stop winnat` 后重启 winnat，但没必要 |
+| 启动报 `EADDRINUSE` | 已有实例在跑（窗口会提示实际地址），或换端口 |
 | 改了界面但安装包里没变化 | 打包前要 pnpm build（或直接用 pnpm release） |
 | 改了模型但界面没变 | 源码版重启服务；安装版必须重打包 |
 | 安装包被 SmartScreen 拦截 | 未签名属正常，点「更多信息 → 仍要运行」；想彻底消除需代码签名证书 |

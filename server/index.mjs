@@ -604,5 +604,10 @@ server.on("error", function (e) {
     console.error("[error] 端口 " + PORT + " 已被占用，可用 PORT=8790 换一个端口启动");
     process.exit(1);
   }
+  if (e && e.code === "EACCES") {
+    console.error("[error] 端口 " + PORT + " 被系统保留，无法监听（Windows 的 Hyper-V/WinNAT 常见现象）。");
+    console.error("        用 start.bat 启动会自动换一个可用端口，或手动指定 PORT，例如 PORT=9050 node server/index.mjs");
+    process.exit(1);
+  }
   throw e;
 });
